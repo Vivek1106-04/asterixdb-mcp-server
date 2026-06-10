@@ -15,9 +15,9 @@ from ..cc_client import CCClient
 from ..compiler_params import validate_compiler_parameters
 from ..config import Settings
 from ..context_id import make_client_context_id
-from ..egress import bound_rows_for_llm
+from ..egress import COLUMNAR_FLAGGED_MAX_ROWS, bound_rows_for_llm, minimized_caps
 from ..errors import GatewayError
-from ..plan_guard import enforce_columnar_safety
+from ..plan_guard import ColumnarAdvisory, assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
 from . import ToolResult
 
@@ -25,6 +25,9 @@ from . import ToolResult
 # what the LLM was told it could request.
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 1000
+
+# Re-exported for tests/readers; the flagged egress ceilings live in egress.py.
+__all__ = ["COLUMNAR_FLAGGED_MAX_ROWS", "DEFAULT_LIMIT", "MAX_LIMIT", "run_execute_query"]
 
 
 async def run_execute_query(
@@ -55,11 +58,9 @@ async def run_execute_query(
         validated_params = (
             validate_compiler_parameters(compiler_parameters) if compiler_parameters else None
         )
-        rejection = await _columnar_preflight(
+        advisory = await _columnar_preflight(
             client, client_context_id, effective_statement, dataverse
         )
-        if rejection is not None:
-            return ToolResult.error(rejection)
         envelope = await client.execute(
             effective_statement,
             client_context_id=client_context_id,
@@ -77,9 +78,11 @@ async def run_execute_query(
         rows = [rows]
     paged = rows[offset : offset + limit]
     more_available = offset + limit < len(rows)
-    # Egress layer 4: cap what actually reaches the LLM.
+    # Egress layer 4: cap what actually reaches the LLM. A flagged columnar full
+    # scan tightens these caps further to minimize output (the query still ran).
+    max_rows, max_bytes = _egress_caps(settings, advisory)
     window, truncation = bound_rows_for_llm(
-        paged, settings.max_rows_to_llm, settings.max_bytes_to_llm, settings.max_field_chars
+        paged, max_rows, max_bytes, settings.max_field_chars
     )
 
     structured: dict[str, Any] = {
@@ -103,22 +106,31 @@ async def run_execute_query(
     warnings = envelope.get("warnings")
     if warnings:
         structured["warnings"] = warnings
+    if advisory is not None:
+        structured["advisories"] = [advisory.to_payload()]
 
     return ToolResult(text=_summarize(structured), structured=structured)
 
 
+def _egress_caps(settings: Settings, advisory: ColumnarAdvisory | None) -> tuple[int, int]:
+    """Row/byte egress caps, tightened when a columnar full scan was flagged."""
+    if advisory is None:
+        return settings.max_rows_to_llm, settings.max_bytes_to_llm
+    return minimized_caps(settings.max_rows_to_llm, settings.max_bytes_to_llm)
+
+
 async def _columnar_preflight(
     client: CCClient, ccid: str, statement: str, dataverse: str | None
-) -> GatewayError | None:
-    """Compile-only the statement and reject an unrestricted columnar full scan.
+) -> ColumnarAdvisory | None:
+    """Compile-only the statement and flag an unrestricted columnar full scan.
 
-    A compile failure here yields no plan (no rejection); the subsequent real
+    A compile failure here yields no plan (no advisory); the subsequent real
     execute surfaces the actual compile error to the caller.
     """
     plan_env = await client.compile_query(
         statement, client_context_id=ccid, dataverse=dataverse, emit_plan=True
     )
-    return await enforce_columnar_safety(client, ccid, plan_env.get("plans"), dataverse)
+    return await assess_columnar_scan(client, ccid, plan_env.get("plans"), dataverse)
 
 
 def _summarize(structured: dict[str, Any]) -> str:
@@ -128,4 +140,9 @@ def _summarize(structured: dict[str, Any]) -> str:
         parts.append(f"from offset {structured['offset']}")
     if structured["moreAvailable"]:
         parts.append("(more rows available in this result, increase limit or page with offset)")
+    if structured.get("advisories"):
+        parts.append(
+            "[columnar full scan flagged — output minimized; project columns or add a "
+            "WHERE filter to widen]"
+        )
     return " ".join(parts) + "."

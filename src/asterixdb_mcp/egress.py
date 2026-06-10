@@ -36,6 +36,18 @@ TRUNCATION_NEXT_STEP_HINT = (
     "submit_async_query and page through fetch_query_result with offset/limit."
 )
 
+# Tightened egress ceilings applied when a query is flagged as an unrestricted
+# columnar full scan: the query still runs, but we minimize what reaches the LLM
+# ("flag + run + minimize", not "reject"). Applied via min() so a flag can only
+# shrink the configured caps, never raise them.
+COLUMNAR_FLAGGED_MAX_ROWS = 10
+COLUMNAR_FLAGGED_MAX_BYTES = 16 * 1024  # 16 KiB
+
+
+def minimized_caps(max_rows: int, max_bytes: int) -> tuple[int, int]:
+    """Tighten the given row/byte caps to the columnar-flagged ceilings."""
+    return min(max_rows, COLUMNAR_FLAGGED_MAX_ROWS), min(max_bytes, COLUMNAR_FLAGGED_MAX_BYTES)
+
 
 def format_timeout(max_time_ms: int) -> str:
     """Render a millisecond ceiling as the CC timeout duration string.

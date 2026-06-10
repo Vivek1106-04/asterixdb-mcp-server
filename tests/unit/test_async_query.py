@@ -319,6 +319,35 @@ async def test_fetch_windows_rows(settings: Settings, audit: AuditLog) -> None:
     assert cap.requests[-1].url.path == "/result/x"
 
 
+async def test_fetch_minimizes_output_when_flagged(settings: Settings, audit: AuditLog) -> None:
+    from asterixdb_mcp.plan_guard import ADVISORY_TYPE
+    from asterixdb_mcp.tools.execute_query import COLUMNAR_FLAGGED_MAX_ROWS
+
+    # A submission flagged at submit time carries the advisory on its audit entry.
+    advisory = {"type": ADVISORY_TYPE, "datasets": ["DV.Cols"], "message": "flagged"}
+    entry = AuditEntry(
+        "sess-test::_::u",
+        "sess",
+        "SELECT * FROM DV.Cols;",
+        audit.now(),
+        handle="/status/0-1",
+        advisory=advisory,
+    )
+    audit.record(entry.with_result_handle("/result/x"))
+    rows = [{"i": n} for n in range(50)]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+
+    result = await run_fetch_query_result(
+        cap.client, settings, audit, client_context_id="sess-test::_::u", limit=50
+    )
+
+    # Output minimized to the flagged ceiling, advisory re-surfaced, never blocked.
+    assert result.structured["rowsReturned"] == COLUMNAR_FLAGGED_MAX_ROWS
+    assert result.structured["moreAvailable"] is True
+    assert result.structured["advisories"][0]["type"] == ADVISORY_TYPE
+    assert "output minimized" in result.text
+
+
 async def test_fetch_wraps_scalar_result(settings: Settings, audit: AuditLog) -> None:
     _seed_completed(audit)
     cap = make_capturing_cc(settings, response_json={"status": "success", "results": 42})
@@ -443,15 +472,23 @@ def _columnar_plan_handler():
     return handler
 
 
-async def test_submit_rejects_columnar_full_scan(
+async def test_submit_flags_columnar_full_scan_without_blocking(
     settings: Settings, audit: AuditLog, pools: PermitPools
 ) -> None:
+    from asterixdb_mcp.plan_guard import ADVISORY_TYPE
+
     cap = make_capturing_cc(settings, handler=_columnar_plan_handler())
     result = await run_submit_async_query(
-        cap.client, settings, audit, pools, statement="SELECT * FROM DV.Cols LIMIT 5;"
+        cap.client, settings, audit, pools, statement="SELECT * FROM DV.Cols"
     )
-    assert result.is_error is True
-    assert result.structured["errorType"] == ErrorType.PLAN_REJECTED.value
+    # Not blocked: the submission went through and returned a handle.
+    assert result.is_error is False
+    assert result.structured["status"] == "submitted"
+    # Flagged with a non-fatal advisory, both on the result and on the audit entry.
+    assert result.structured["advisories"][0]["type"] == ADVISORY_TYPE
+    entry = audit.get(result.structured["clientContextID"])
+    assert entry is not None and entry.advisory is not None
+    assert entry.advisory["datasets"] == ["DV.Cols"]
 
 
 async def test_wait_foreign_session_forbidden(

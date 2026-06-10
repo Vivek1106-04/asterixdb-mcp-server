@@ -25,10 +25,10 @@ from ..cc_client import HANDLE_FIELD, STATUS_FIELD, CCClient
 from ..compiler_params import validate_compiler_parameters
 from ..config import Settings
 from ..context_id import make_client_context_id, parse_client_context_id, sanitize_segment
-from ..egress import bound_rows_for_llm
+from ..egress import bound_rows_for_llm, minimized_caps
 from ..errors import ErrorType, GatewayError, classify_cc_error
 from ..permits import PermitPools
-from ..plan_guard import enforce_columnar_safety
+from ..plan_guard import assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
 from . import ToolResult
 
@@ -84,11 +84,9 @@ async def run_submit_async_query(
             emit_plan=True,
             signature=True,
         )
-        rejection = await enforce_columnar_safety(
+        advisory = await assess_columnar_scan(
             client, client_context_id, compiled.get("plans"), dataverse
         )
-        if rejection is not None:
-            return ToolResult.error(rejection)
         async with pools.async_.acquire():
             envelope = await client.submit_async(
                 effective_statement,
@@ -101,6 +99,7 @@ async def run_submit_async_query(
 
     handle = _as_str(envelope.get(HANDLE_FIELD))
     status = _as_str(envelope.get(STATUS_FIELD)) or "running"
+    advisory_payload = advisory.to_payload() if advisory is not None else None
     audit.record(
         AuditEntry(
             client_context_id=client_context_id,
@@ -110,10 +109,11 @@ async def run_submit_async_query(
             handle=handle,
             dataverse=dataverse,
             signature=compiled.get("signature"),
+            advisory=advisory_payload,
         )
     )
 
-    structured = {
+    structured: dict[str, Any] = {
         "status": "submitted",
         "clientContextID": client_context_id,
         "queryStatus": status,
@@ -122,6 +122,9 @@ async def run_submit_async_query(
         f"Submitted async query. Pass clientContextID {client_context_id!r} to "
         f"wait_on_async_query, then fetch_query_result."
     )
+    if advisory_payload is not None:
+        structured["advisories"] = [advisory_payload]
+        text += " Note: columnar full scan flagged — fetched output will be minimized."
     return ToolResult(text=text, structured=structured)
 
 
@@ -274,9 +277,14 @@ async def run_fetch_query_result(
     if not isinstance(rows, list):
         rows = [rows]
     paged = rows[offset : offset + limit]
-    # Egress layer 4: clamp huge field values, then cap what reaches the LLM.
+    # Egress layer 4: clamp huge field values, then cap what reaches the LLM. A
+    # query flagged at submission as a columnar full scan tightens the caps so the
+    # fetched output is minimized (the query still ran).
+    max_rows, max_bytes = settings.max_rows_to_llm, settings.max_bytes_to_llm
+    if entry.advisory is not None:
+        max_rows, max_bytes = minimized_caps(max_rows, max_bytes)
     window, truncation = bound_rows_for_llm(
-        paged, settings.max_rows_to_llm, settings.max_bytes_to_llm, settings.max_field_chars
+        paged, max_rows, max_bytes, settings.max_field_chars
     )
     structured: dict[str, Any] = {
         "status": "success",
@@ -296,9 +304,11 @@ async def run_fetch_query_result(
     # signature captured at submission time.
     if entry.signature is not None:
         structured["signature"] = entry.signature
-    return ToolResult(
-        text=f"Returned {len(window)} row(s) from the async result.", structured=structured
-    )
+    text = f"Returned {len(window)} row(s) from the async result."
+    if entry.advisory is not None:
+        structured["advisories"] = [entry.advisory]
+        text += " [columnar full scan flagged — output minimized]"
+    return ToolResult(text=text, structured=structured)
 
 
 async def run_cancel_query(
