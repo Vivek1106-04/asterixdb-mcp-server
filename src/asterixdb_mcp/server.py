@@ -204,8 +204,11 @@ CHECK_INDEX_USAGE_DESCRIPTION = (
 
 LIST_FUNCTIONS_DESCRIPTION = (
     "List SQL++ functions — both built-ins and user-defined functions (UDFs) — so you never "
-    "guess a function name. Filter by `language` (INTERNAL = built-in, SQL++/JAVA/PYTHON = "
-    "UDF) and/or a `nameContains` substring, with offset/limit paging. Call this before using "
+    "guess a function name. Built-ins are read live from the engine, so the list reflects the "
+    "running version. Filter by `language` (INTERNAL = built-in, SQL++/JAVA/PYTHON = UDF), by "
+    "`category` for built-ins (window, aggregate, aggregate-scalar, unnest, datasource, scalar), "
+    "and/or a `nameContains` substring, with offset/limit paging. Use `category=window` to find "
+    "window functions and `category=aggregate` for the SQL++ aggregates. Call this before using "
     "an unfamiliar function; the built-in standard-deviation aggregates are STDDEV_SAMP and "
     "STDDEV_POP (there is no STDEV)."
 )
@@ -501,6 +504,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             Literal["INTERNAL", "SQL++", "JAVA", "PYTHON"] | None,
             Field(description="Filter by function language."),
         ] = None,
+        category: Annotated[
+            Literal["window", "aggregate", "aggregate-scalar", "unnest", "datasource", "scalar"]
+            | None,
+            Field(description="Filter built-ins by category (e.g. window vs aggregate)."),
+        ] = None,
         nameContains: Annotated[
             str | None, Field(description="Case-insensitive name substring filter.")
         ] = None,
@@ -511,6 +519,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             _client(),
             settings,
             language=language,
+            category=category,
             name_contains=nameContains,
             offset=offset,
             limit=limit,

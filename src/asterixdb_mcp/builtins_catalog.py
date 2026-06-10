@@ -1,10 +1,10 @@
-"""Curated catalog of common AsterixDB SQL++ built-in functions.
+"""Curated fallback catalog of common AsterixDB SQL++ built-in functions.
 
-AsterixDB ships ~800 builtins defined in ``BuiltinFunctions.java``. Generating the
-full catalog is a build-time step against that source; until that codegen lands,
-this is a curated, high-frequency subset covering the functions an LLM reaches
-for most — with the aggregates spelled out precisely so the model stops
-hallucinating ``STDEV``/``STDDEV`` (see statement_guard).
+list_functions reads the full builtin set live from the engine's
+``function_metadata()`` datasource function. This curated, high-frequency subset is
+the fallback for clusters that predate that function (or when the query fails) and
+the source of one-line summaries for get_function — with the aggregates spelled out
+precisely so the model stops hallucinating ``STDEV``/``STDDEV`` (see statement_guard).
 
 Each entry is language INTERNAL. UDFs (SQL++, Java, Python) are read live from the
 Metadata catalog and merged in by list_functions/get_function; this static set is
