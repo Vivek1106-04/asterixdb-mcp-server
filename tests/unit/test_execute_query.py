@@ -158,10 +158,13 @@ async def test_unsupported_function_is_caught_before_cc(settings: Settings) -> N
     assert cap.requests == []
 
 
-async def test_columnar_full_scan_rejected(settings: Settings) -> None:
+async def test_columnar_full_scan_flagged_run_and_minimized(settings: Settings) -> None:
     from urllib.parse import parse_qs
 
     import httpx
+
+    from asterixdb_mcp.plan_guard import ADVISORY_TYPE
+    from asterixdb_mcp.tools.execute_query import COLUMNAR_FLAGGED_MAX_ROWS
 
     plan = {
         "status": "success",
@@ -174,6 +177,7 @@ async def test_columnar_full_scan_rejected(settings: Settings) -> None:
         },
     }
     record = {"DataverseName": "DV", "DatasetName": "Cols", "DatasetFormat": {"Format": "column"}}
+    data_rows = [{"i": n} for n in range(50)]
 
     def handler(req: httpx.Request) -> httpx.Response:
         form = {k: v[0] for k, v in parse_qs(req.content.decode()).items()}
@@ -181,11 +185,21 @@ async def test_columnar_full_scan_rejected(settings: Settings) -> None:
             return httpx.Response(200, json=plan)
         if "Metadata.`Dataset`" in form.get("statement", ""):
             return httpx.Response(200, json={"status": "success", "results": [record]})
-        return httpx.Response(200, json={"status": "success", "results": []})
+        return httpx.Response(200, json={"status": "success", "results": data_rows})
 
     cap = make_capturing_cc(settings, handler=handler)
     result = await run_execute_query(
-        cap.client, settings, statement="SELECT * FROM DV.Cols LIMIT 5;"
+        cap.client, settings, statement="SELECT * FROM DV.Cols", limit=50
     )
-    assert result.is_error is True
-    assert result.structured["errorType"] == ErrorType.PLAN_REJECTED.value
+
+    # Not blocked: the query ran and returned rows.
+    assert result.is_error is False
+    assert result.structured["status"] == "success"
+    # Flagged with a non-fatal advisory naming the dataset.
+    advisories = result.structured["advisories"]
+    assert advisories[0]["type"] == ADVISORY_TYPE
+    assert advisories[0]["datasets"] == ["DV.Cols"]
+    # Output minimized: row window clamped to the flagged ceiling, truncation signalled.
+    assert result.structured["rowsReturned"] == COLUMNAR_FLAGGED_MAX_ROWS
+    assert result.structured["moreAvailable"] is True
+    assert "output minimized" in result.text

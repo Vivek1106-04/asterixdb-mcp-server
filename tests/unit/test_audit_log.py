@@ -135,4 +135,5 @@ def test_to_public_shape() -> None:
         "resultHandle": None,
         "dataverse": None,
         "signature": None,
+        "advisories": [],
     }

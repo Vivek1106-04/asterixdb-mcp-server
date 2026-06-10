@@ -27,9 +27,11 @@ from . import ToolResult
 FIELD_DATASET_FORMAT = "DatasetFormat"
 FIELD_FORMAT = "Format"
 FORMAT_COLUMNAR_HINT = (
-    "Strongly prefer explicit field projection. SELECT * on a COLUMNAR dataset forces "
-    "full column-group reconstruction and negates the columnar advantage; such queries "
-    "may be rejected at plan analysis (errorType=PLAN_REJECTED)."
+    "Strongly prefer explicit field projection. SELECT * (or a bare full scan with no "
+    "projection or WHERE) on a COLUMNAR dataset forces full column-group reconstruction "
+    "and negates the columnar advantage. Such a query still runs, but it is flagged with a "
+    "COLUMNAR_FULL_SCAN advisory and its output is minimized; project the columns you need "
+    "or add a WHERE filter to run it faster and see more rows."
 )
 
 

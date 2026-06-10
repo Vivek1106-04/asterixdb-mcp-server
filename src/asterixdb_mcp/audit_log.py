@@ -35,6 +35,9 @@ class AuditEntry:
     result_handle: str | None = None
     dataverse: str | None = None
     signature: Any = None
+    # Non-fatal columnar full-scan advisory payload captured at submission, so
+    # fetch_query_result can minimize output and re-surface the flag.
+    advisory: dict[str, Any] | None = None
 
     def with_handle(self, handle: str) -> AuditEntry:
         """Return a copy carrying the CC status handle (immutable update)."""
@@ -55,6 +58,7 @@ class AuditEntry:
             "resultHandle": self.result_handle,
             "dataverse": self.dataverse,
             "signature": self.signature,
+            "advisories": [self.advisory] if self.advisory else [],
         }
 
 
