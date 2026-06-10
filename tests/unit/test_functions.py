@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs
+
 import httpx
 import pytest
 
@@ -9,9 +11,20 @@ from asterixdb_mcp.builtins_catalog import BUILTINS_BY_NAME, all_builtins
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.errors import ErrorType
 from asterixdb_mcp.tools.functions import run_get_function, run_list_functions
-from tests.conftest import make_capturing_cc
+from tests.conftest import json_response, make_capturing_cc
 
 pytestmark = pytest.mark.anyio
+
+
+def _split_source_handler(builtins: list[dict] | None, udfs: list[dict] | None):
+    """Route the builtin query (function_metadata()) and the UDF query separately."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        statement = parse_qs(req.content.decode())["statement"][0]
+        rows = builtins if "function_metadata()" in statement else udfs
+        return json_response({"status": "success", "results": rows or []})
+
+    return handler
 
 
 # builtins catalog
@@ -48,6 +61,56 @@ async def test_list_language_filter(settings: Settings) -> None:
     cap = make_capturing_cc(settings, response_json={"status": "success", "results": [udf]})
     result = await run_list_functions(cap.client, settings, language="JAVA")
     assert {f["language"] for f in result.structured["functions"]} == {"JAVA"}
+
+
+async def test_list_builtins_from_function_metadata(settings: Settings) -> None:
+    # Live builtins come from function_metadata(): name/arity/category carry through.
+    builtins = [
+        {"name": "row_number", "arity": 0, "category": "window", "private": False},
+        {"name": "sum", "arity": -1, "category": "aggregate", "private": False},
+    ]
+    cap = make_capturing_cc(settings, handler=_split_source_handler(builtins, []))
+    result = await run_list_functions(cap.client, settings, language="INTERNAL")
+    by_name = {f["name"]: f for f in result.structured["functions"]}
+    assert by_name["row_number"]["category"] == "window"
+    assert by_name["row_number"]["arity"] == 0
+    assert by_name["sum"]["category"] == "aggregate"
+    assert all(f["language"] == "INTERNAL" for f in result.structured["functions"])
+
+
+async def test_list_builtin_query_excludes_private(settings: Settings) -> None:
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    await run_list_functions(cap.client, settings, language="INTERNAL")
+    statements = [
+        parse_qs(r.content.decode())["statement"][0]
+        for r in cap.requests
+        if r.url.path == "/query/service"
+    ]
+    assert any("function_metadata()" in s and "private = false" in s for s in statements)
+
+
+async def test_list_category_filter(settings: Settings) -> None:
+    builtins = [
+        {"name": "row_number", "arity": 0, "category": "window", "private": False},
+        {"name": "sum", "arity": -1, "category": "aggregate", "private": False},
+    ]
+    cap = make_capturing_cc(settings, handler=_split_source_handler(builtins, []))
+    result = await run_list_functions(cap.client, settings, category="window")
+    assert {f["name"] for f in result.structured["functions"]} == {"row_number"}
+
+
+async def test_list_rejects_unknown_category(settings: Settings) -> None:
+    cap = make_capturing_cc(settings)
+    result = await run_list_functions(cap.client, settings, category="magic")
+    assert result.structured["errorType"] == ErrorType.INVALID_PARAMETER.value
+    assert cap.requests == []
+
+
+async def test_list_falls_back_to_curated_when_function_metadata_empty(settings: Settings) -> None:
+    # function_metadata() yields nothing (or predates the cluster) -> curated catalog.
+    cap = make_capturing_cc(settings, handler=_split_source_handler([], []))
+    result = await run_list_functions(cap.client, settings, name_contains="stddev")
+    assert "stddev_samp" in {f["name"] for f in result.structured["functions"]}
 
 
 async def test_list_rejects_unknown_language(settings: Settings) -> None:
