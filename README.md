@@ -33,6 +33,13 @@ and resource-template arguments support live `completion/complete`: typing a
 `dataverse`, `dataset`, or grouping/metric field completes from the cluster's
 real metadata, scoped by any argument already chosen.
 
+Every tool also advertises an `outputSchema` describing its successful result
+shape, so a client can anticipate the payload and chain calls (e.g. that
+`submit_async_query` yields the `clientContextID` `fetch_query_result` consumes).
+The schema characterizes successful results only; an error is flagged with
+`isError` and carries the gateway error envelope, so advertisement never causes
+a failed call to be rejected.
+
 ### Tools
 
 | Group | Tool | Purpose |
