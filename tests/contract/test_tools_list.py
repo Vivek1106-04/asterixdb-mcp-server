@@ -100,6 +100,30 @@ async def test_open_world_and_idempotency_hints(server) -> None:
     assert tools["execute_query"].annotations.idempotentHint is True
 
 
+async def test_every_tool_advertises_an_output_schema(server) -> None:
+    # High-end clients read outputSchema to anticipate result shape and chain calls.
+    tools = await server.list_tools()
+    for tool in tools:
+        assert tool.outputSchema is not None, tool.name
+        assert tool.outputSchema["type"] == "object", tool.name
+
+
+async def test_output_schema_is_advertised_not_enforced_on_errors() -> None:
+    # A failing call must still return its error envelope, never be rejected for
+    # not matching the advertised success schema.
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"errors": [{"msg": "boom"}]})
+
+    settings = Settings(cc_base_url="http://test-cc:19002")
+    http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
+    )
+    server = build_server(settings, http=http)
+    result = await server.call_tool("get_schema", {"dataverse": "D", "dataset": "X"})
+    assert result.isError is True
+    assert "errorType" in result.structuredContent
+
+
 async def test_execute_query_schema_requires_statement_and_hides_readonly(server) -> None:
     tools = {t.name: t for t in await server.list_tools()}
     schema = tools["execute_query"].inputSchema

@@ -25,6 +25,7 @@ from .cc_client import CCClient
 from .completions import complete_argument
 from .config import Settings, load_settings
 from .errors import GatewayError
+from .output_schemas import apply_output_schemas
 from .permits import PermitPools
 from .prompts.analyze_dataverse import run_analyze_dataverse
 from .prompts.power_prompts import (
@@ -733,6 +734,9 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             partial=argument.value,
             context_arguments=context_arguments,
         )
+
+    # Advertise each tool's successful-result shape (decoupled from validation).
+    apply_output_schemas(mcp)
 
     return mcp
 
