@@ -6,7 +6,9 @@ functional design so accidental drift in names or schemas is caught in CI.
 
 from __future__ import annotations
 
+import httpx
 import pytest
+from mcp import types
 
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.server import build_server
@@ -17,6 +19,31 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture
 def server() -> object:
     return build_server(Settings(cc_base_url="http://test-cc:19002"))
+
+
+async def test_completion_handler_completes_dataverse_argument() -> None:
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"results": [{"DataverseName": "Sales"}, {"DataverseName": "Shop"}]}
+        )
+
+    settings = Settings(cc_base_url="http://test-cc:19002")
+    http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
+    )
+    server = build_server(settings, http=http)
+    low = server._mcp_server
+    assert types.CompleteRequest in low.request_handlers
+
+    request = types.CompleteRequest(
+        method="completion/complete",
+        params=types.CompleteRequestParams(
+            ref=types.PromptReference(type="ref/prompt", name="analyze_dataverse"),
+            argument=types.CompletionArgument(name="dataverse", value="s"),
+        ),
+    )
+    result = await low.request_handlers[types.CompleteRequest](request)
+    assert set(result.root.completion.values) == {"Sales", "Shop"}
 
 
 async def test_advertises_exactly_the_expected_tools(server) -> None:
@@ -42,6 +69,35 @@ async def test_advertises_exactly_the_expected_tools(server) -> None:
         "get_node_details",
         "get_reference",
     }
+
+
+async def test_every_tool_advertises_behavioral_annotations(server) -> None:
+    # High-end clients read annotations to decide auto-invocation. Every tool must
+    # carry hints; the gateway never destroys data, so destructiveHint is False
+    # across the whole surface.
+    tools = await server.list_tools()
+    for tool in tools:
+        assert tool.annotations is not None, tool.name
+        assert tool.annotations.title, tool.name
+        assert tool.annotations.destructiveHint is False, tool.name
+
+
+async def test_read_only_tools_are_marked_read_only(server) -> None:
+    tools = {t.name: t for t in await server.list_tools()}
+    # cancel_query mutates server-side execution state; everything else is read-only.
+    for name, tool in tools.items():
+        expected = name != "cancel_query"
+        assert tool.annotations.readOnlyHint is expected, name
+
+
+async def test_open_world_and_idempotency_hints(server) -> None:
+    tools = {t.name: t for t in await server.list_tools()}
+    # get_reference reads in-gateway static docs; it is the only closed-world tool.
+    assert tools["get_reference"].annotations.openWorldHint is False
+    assert tools["execute_query"].annotations.openWorldHint is True
+    # Each submit allocates a fresh async handle, so it is not idempotent.
+    assert tools["submit_async_query"].annotations.idempotentHint is False
+    assert tools["execute_query"].annotations.idempotentHint is True
 
 
 async def test_execute_query_schema_requires_statement_and_hides_readonly(server) -> None:
