@@ -54,12 +54,22 @@ def _array_of_objects() -> _JSON:
     return {"type": "array", "items": {"type": "object", "additionalProperties": True}}
 
 
+def _result_rows() -> _JSON:
+    """Rows from a query: items are unconstrained.
+
+    A SQL++ ``SELECT VALUE`` projection legitimately yields scalars or arrays
+    (e.g. ``SELECT VALUE COUNT(*)`` -> ``[46219]``), not only objects, so the
+    items must stay open or a validating client rejects a valid result.
+    """
+    return {"type": "array"}
+
+
 # name -> JSON Schema for the successful structured result.
 OUTPUT_SCHEMAS: dict[str, _JSON] = {
     "execute_query": _obj(
         {
             "status": _STRING,
-            "results": _array_of_objects(),
+            "results": _result_rows(),
             "rowsReturned": _INT,
             "rowsAvailableInResponse": _INT,
             "moreAvailable": _BOOL,
@@ -128,7 +138,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
             "dataset": _STRING,
             "sampleSize": _INT,
             "rowsReturned": _INT,
-            "results": _array_of_objects(),
+            "results": _result_rows(),
             "egress": _OBJECT,
         },
         required=("results",),
@@ -162,7 +172,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         {
             "status": _STRING,
             "clientContextID": _STRING,
-            "results": _array_of_objects(),
+            "results": _result_rows(),
             "rowsReturned": _INT,
             "rowsAvailableInResponse": _INT,
             "moreAvailable": _BOOL,

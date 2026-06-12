@@ -109,8 +109,11 @@ async def test_every_tool_advertises_an_output_schema(server) -> None:
 
 
 async def test_output_schema_is_advertised_not_enforced_on_errors() -> None:
-    # A failing call must still return its error envelope, never be rejected for
-    # not matching the advertised success schema.
+    # A failing call must surface its error, never be rejected for not matching
+    # the advertised success schema. Error results carry no structured content
+    # (a client validates structuredContent against the success outputSchema, so
+    # an error envelope there would be rejected and mask the real error); the
+    # classified errorType lives in the text content instead.
     def handler(_req: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"errors": [{"msg": "boom"}]})
 
@@ -121,7 +124,8 @@ async def test_output_schema_is_advertised_not_enforced_on_errors() -> None:
     server = build_server(settings, http=http)
     result = await server.call_tool("get_schema", {"dataverse": "D", "dataset": "X"})
     assert result.isError is True
-    assert "errorType" in result.structuredContent
+    assert result.structuredContent is None
+    assert result.content[0].text.split(":")[0].isupper()
 
 
 async def test_execute_query_schema_requires_statement_and_hides_readonly(server) -> None:

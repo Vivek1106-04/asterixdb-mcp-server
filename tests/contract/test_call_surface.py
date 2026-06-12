@@ -175,7 +175,10 @@ async def test_lazy_client_creation_without_injected_http() -> None:
     server = build_server(Settings(cc_base_url="http://127.0.0.1:1", request_timeout_s=1.0))
     result = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
     assert result.isError is True
-    assert result.structuredContent["errorType"] in {"INTERNAL", "TIMEOUT"}
+    # Error envelopes carry no structured content (it would fail outputSchema
+    # validation); the classified errorType is in the text content.
+    assert result.structuredContent is None
+    assert result.content[0].text.split(":")[0] in {"INTERNAL", "TIMEOUT"}
 
 
 async def test_submit_async_query_call() -> None:
@@ -230,7 +233,8 @@ async def test_wait_unknown_client_context_id_call() -> None:
         "wait_on_async_query", {"clientContextID": "sess-test::_::missing"}
     )
     assert result.isError is True
-    assert result.structuredContent["errorType"] == "NOT_FOUND"
+    assert result.structuredContent is None
+    assert result.content[0].text.split(":")[0] == "NOT_FOUND"
 
 
 async def test_cancel_query_call() -> None:
@@ -299,7 +303,8 @@ async def test_execute_query_sheds_load_when_sync_pool_full() -> None:
     # The second call finds the pool full and is shed with NOT_READY.
     second = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
     assert second.isError is True
-    assert second.structuredContent["errorType"] == "NOT_READY"
+    assert second.structuredContent is None
+    assert second.content[0].text.split(":")[0] == "NOT_READY"
 
     release.set()
     await first
@@ -438,6 +443,39 @@ async def test_get_reference_call_returns_static_topic() -> None:
     result = await server.call_tool("get_reference", {"topic": "index-types"})
     assert result.structuredContent["topic"] == "index-types"
     assert result.isError is False
+
+
+async def test_select_value_scalar_result_survives_and_validates() -> None:
+    # SELECT VALUE COUNT(*) yields a scalar row [46219]. The result must flow
+    # through unchanged AND pass the advertised outputSchema the client checks.
+    from jsonschema import validate
+
+    from asterixdb_mcp.output_schemas import OUTPUT_SCHEMAS
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        form = {k: v[0] for k, v in parse_qs(req.content.decode()).items()}
+        if form.get("compile-only") == "true":
+            return httpx.Response(200, json={"status": "success"})
+        return httpx.Response(200, json={"status": "success", "results": [46219]})
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool(
+        "execute_query", {"statement": "SELECT VALUE COUNT(*) FROM DV.Big;"}
+    )
+    assert result.isError is False
+    assert result.structuredContent["results"] == [46219]
+    validate(result.structuredContent, OUTPUT_SCHEMAS["execute_query"])
+
+
+async def test_error_result_ships_no_structured_content() -> None:
+    # A gateway error must not carry structured content: a client validates it
+    # against the success outputSchema and would mask the real error. The
+    # classified errorType stays in the text content.
+    server = _server_with_mock(lambda r: httpx.Response(500, text="boom"))
+    result = await server.call_tool("execute_query", {"statement": "SELECT VALUE 1;"})
+    assert result.isError is True
+    assert result.structuredContent is None
+    assert result.content[0].text.split(":")[0].isupper()
 
 
 def test_main_builds_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:

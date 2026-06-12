@@ -54,3 +54,25 @@ def test_apply_raises_on_unknown_tool() -> None:
     empty = FastMCP("empty")
     with pytest.raises(KeyError):
         apply_output_schemas(empty)
+
+
+# Tools whose ``results`` hold query rows: SQL++ SELECT VALUE can return scalars
+# or arrays, so the row shape must stay unconstrained.
+_RESULT_ROW_TOOLS = ("execute_query", "sample_dataset", "fetch_query_result")
+
+
+def test_result_carrying_schemas_do_not_constrain_row_shape() -> None:
+    for name in _RESULT_ROW_TOOLS:
+        results_schema = OUTPUT_SCHEMAS[name]["properties"]["results"]
+        assert results_schema == {"type": "array"}, name
+
+
+def test_execute_query_schema_accepts_scalar_and_object_rows() -> None:
+    # Mirrors the client-side check (mcp.client.session validates structured
+    # content with jsonschema). A SELECT VALUE COUNT(*) row [46219] must pass.
+    from jsonschema import validate
+
+    schema = OUTPUT_SCHEMAS["execute_query"]
+    validate({"status": "success", "results": [46219]}, schema)
+    validate({"status": "success", "results": [{"type": "1", "cnt": 27777}]}, schema)
+    validate({"status": "success", "results": [["a", "b"]]}, schema)
