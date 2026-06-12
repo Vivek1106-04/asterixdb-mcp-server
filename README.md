@@ -21,9 +21,10 @@ LLM client  ──MCP (stdio)──▶  AsterixDB MCP Gateway  ──HTTP──�
 
 ## Capabilities
 
-**19 tools, 11 resources, 6 prompts.** Tools perform actions; resources expose
-read-only context a client can attach to a session; prompts are guided
-multi-step workflows.
+**19 tools, 11 resources, 4 resource templates, 6 prompts.** Tools perform
+actions; resources expose read-only context a client can attach to a session;
+resource templates expose that context per dataverse/dataset via a URI pattern;
+prompts are guided multi-step workflows.
 
 Every tool advertises MCP behavioral annotations (`readOnlyHint`,
 `destructiveHint`, `idempotentHint`, `openWorldHint`) so a client can tell a
@@ -79,6 +80,20 @@ a failed call to be rejected.
 | `asterixdb://reference/type-system` | SQL++ / ADM type system. |
 | `asterixdb://reference/error-codes` | Gateway error taxonomy. |
 | `asterixdb://reference/query-examples` | Worked SQL++ examples. |
+
+### Resource templates
+
+Parameterized URIs a client fills in to attach dataverse- or dataset-scoped
+context without a tool call. The `{variables}` resolve against live `Metadata`,
+so any dataverse or dataset added later works with no code change, and they
+autocomplete through `completion/complete`.
+
+| URI template | Purpose |
+|--------------|---------|
+| `asterixdb://schema/{dataverse}/{dataset}` | One dataset's declared schema incl. storage format. |
+| `asterixdb://dataverse/{dataverse}` | Full schema of every dataset in a dataverse. |
+| `asterixdb://sample/{dataverse}/{dataset}` | A small bounded sample of real documents. |
+| `asterixdb://datasets/{dataverse}` | Dataset summaries within one dataverse. |
 
 ### Prompts
 
@@ -177,7 +192,7 @@ src/asterixdb_mcp/
   permits.py         # non-blocking concurrency permit pools
   statement_guard.py # pre-flight read-only statement guard
   plan_guard.py      # plan-layer mutation backstop
-  server.py          # FastMCP binding (19 tools, 11 resources, 6 prompts)
+  server.py          # FastMCP binding (19 tools, 11 resources, 4 templates, 6 prompts)
   tools/             # one module per tool (SDK-agnostic cores)
   resources/         # live cluster resources + SQL++ reference docs
   prompts/           # guided multi-step workflows

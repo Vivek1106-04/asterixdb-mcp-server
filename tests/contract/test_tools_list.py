@@ -154,6 +154,74 @@ async def test_advertises_expected_resources(server) -> None:
         assert f"asterixdb://reference/{ref}" in uris
 
 
+async def test_advertises_resource_templates(server) -> None:
+    templates = {t.uriTemplate for t in await server.list_resource_templates()}
+    assert templates == {
+        "asterixdb://schema/{dataverse}/{dataset}",
+        "asterixdb://dataverse/{dataverse}",
+        "asterixdb://sample/{dataverse}/{dataset}",
+        "asterixdb://datasets/{dataverse}",
+    }
+
+
+async def test_resource_template_completion_resolves_dataset_argument() -> None:
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [{"DatasetName": "Orders", "DataverseName": "Sales"}]
+            },
+        )
+
+    settings = Settings(cc_base_url="http://test-cc:19002")
+    http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
+    )
+    server = build_server(settings, http=http)
+    low = server._mcp_server
+
+    request = types.CompleteRequest(
+        method="completion/complete",
+        params=types.CompleteRequestParams(
+            ref=types.ResourceTemplateReference(
+                type="ref/resource", uri="asterixdb://schema/{dataverse}/{dataset}"
+            ),
+            argument=types.CompletionArgument(name="dataset", value="ord"),
+            context=types.CompletionContext(arguments={"dataverse": "Sales"}),
+        ),
+    )
+    result = await low.request_handlers[types.CompleteRequest](request)
+    assert result.root.completion.values == ["Orders"]
+
+
+async def test_each_resource_template_reads_through_the_server() -> None:
+    # Drives the four template closures in server.py end to end.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "results": [{"DatasetName": "Orders", "DataverseName": "Sales"}],
+            },
+        )
+
+    settings = Settings(cc_base_url="http://test-cc:19002")
+    http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
+    )
+    server = build_server(settings, http=http)
+
+    for uri in (
+        "asterixdb://schema/Sales/Orders",
+        "asterixdb://dataverse/Sales",
+        "asterixdb://sample/Sales/Orders",
+        "asterixdb://datasets/Sales",
+    ):
+        contents = await server.read_resource(uri)
+        body = list(contents)[0].content
+        assert "status" in body, uri
+
+
 async def test_advertises_power_prompts(server) -> None:
     names = {p.name for p in await server.list_prompts()}
     assert {

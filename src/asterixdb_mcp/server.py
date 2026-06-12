@@ -47,6 +47,12 @@ from .resources.reference import (
     read_sqlpp_syntax,
     read_type_system,
 )
+from .resources.templates import (
+    read_dataset_sample,
+    read_dataset_schema,
+    read_dataverse_datasets,
+    read_dataverse_schema,
+)
 from .resources.version import read_version
 from .tool_annotations import TOOL_ANNOTATIONS
 from .tools import ToolResult
@@ -626,6 +632,45 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     )
     async def cluster_diagnostics_resource() -> str:
         return json.dumps(await read_cluster_diagnostics(_client()), default=str)
+
+    # Parameterized resource templates (client fills the {variables}; they
+    # autocomplete through the completion handler registered below).
+
+    @mcp.resource(
+        "asterixdb://schema/{dataverse}/{dataset}",
+        name="Dataset Schema",
+        mime_type="application/json",
+    )
+    async def dataset_schema_template(dataverse: str, dataset: str) -> str:
+        return await read_dataset_schema(
+            _client(), settings, dataverse=dataverse, dataset=dataset
+        )
+
+    @mcp.resource(
+        "asterixdb://dataverse/{dataverse}",
+        name="Dataverse Schema",
+        mime_type="application/json",
+    )
+    async def dataverse_schema_template(dataverse: str) -> str:
+        return await read_dataverse_schema(_client(), settings, dataverse=dataverse)
+
+    @mcp.resource(
+        "asterixdb://sample/{dataverse}/{dataset}",
+        name="Dataset Sample",
+        mime_type="application/json",
+    )
+    async def dataset_sample_template(dataverse: str, dataset: str) -> str:
+        return await read_dataset_sample(
+            _client(), settings, dataverse=dataverse, dataset=dataset
+        )
+
+    @mcp.resource(
+        "asterixdb://datasets/{dataverse}",
+        name="Dataverse Datasets",
+        mime_type="application/json",
+    )
+    async def dataverse_datasets_template(dataverse: str) -> str:
+        return await read_dataverse_datasets(_client(), settings, dataverse=dataverse)
 
     # Static reference resources (no runtime fetch)
 
