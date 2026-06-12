@@ -281,10 +281,19 @@ class _ClientHolder:
 
 
 def _to_call_tool_result(result: ToolResult) -> types.CallToolResult:
-    """Convert an SDK-agnostic ToolResult to an MCP CallToolResult."""
+    """Convert an SDK-agnostic ToolResult to an MCP CallToolResult.
+
+    An MCP client validates ``structuredContent`` against the tool's advertised
+    ``outputSchema``, which describes a *successful* result. An error envelope
+    has none of that shape (no ``results``, no ``rowsReturned``, ...), so sending
+    it as structured content makes a validating client reject the call and mask
+    the real classified error. Errors therefore carry no structured content; the
+    ``errorType`` and message live in the text content instead.
+    """
+    structured = None if result.is_error else result.structured
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=result.text)],
-        structuredContent=result.structured,
+        structuredContent=structured,
         isError=result.is_error,
     )
 
