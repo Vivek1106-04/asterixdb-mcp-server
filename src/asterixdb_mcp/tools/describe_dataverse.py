@@ -109,9 +109,33 @@ def _assemble(
     }
 
 
+# Cap on per-dataset lines spelled out in the text block; the full per-dataset
+# schema is always in structuredContent.datasets.
+_MAX_LINES_IN_TEXT = 20
+
+
 def _summarize(structured: dict[str, Any]) -> str:
     note = " (truncated)" if structured["truncated"] else ""
-    return (
+    head = (
         f"Dataverse {structured['dataverse']}: described "
         f"{structured['describedCount']} of {structured['datasetCount']} dataset(s){note}."
+    )
+    # A resolved dataverse always has at least one dataset, so the list is never
+    # empty here.
+    datasets = structured["datasets"]
+    lines = [_dataset_line(d) for d in datasets[:_MAX_LINES_IN_TEXT]]
+    remaining = len(datasets) - _MAX_LINES_IN_TEXT
+    if remaining > 0:
+        lines.append(f"  …and {remaining} more (see structuredContent).")
+    return head + "\n" + "\n".join(lines)
+
+
+def _dataset_line(dataset: dict[str, Any]) -> str:
+    """One compact line per dataset: name, primary key, index count, storage format."""
+    primary_key = ", ".join(dataset.get("primaryKey") or []) or "none"
+    secondary = len(dataset.get("secondaryIndexes") or [])
+    fmt = dataset.get("datasetFormatInfo", {}).get("format", "?")
+    return (
+        f"  - {dataset.get('dataset')}: PK [{primary_key}]; "
+        f"{secondary} secondary index(es); {fmt}"
     )
