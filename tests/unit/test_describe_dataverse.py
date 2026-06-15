@@ -76,6 +76,22 @@ async def test_joins_fields_indexes_and_primary_key(settings: Settings) -> None:
     assert doc["datasetFormatInfo"]["format"] == "ROW"
 
 
+async def test_text_lists_per_dataset_facts(settings: Settings) -> None:
+    cap = make_capturing_cc(settings, handler=_handler(["A", "B"]))
+    result = await run_describe_dataverse(cap.client, settings, dataverse="Yelp")
+    # The text block must carry the key facts, not only structuredContent, so a
+    # client that surfaces text can answer keys/indexes/format questions.
+    assert "- A: PK [id]; 1 secondary index(es); ROW" in result.text
+    assert "- B: PK [id]; 0 secondary index(es); ROW" in result.text
+
+
+async def test_text_caps_dataset_lines_with_more_suffix(settings: Settings) -> None:
+    names = [f"ds{i}" for i in range(25)]
+    cap = make_capturing_cc(settings, handler=_handler(names))
+    result = await run_describe_dataverse(cap.client, settings, dataverse="Yelp")
+    assert "…and 5 more" in result.text  # 25 described, 20-line cap
+
+
 async def test_case_insensitive_dataverse_resolution(settings: Settings) -> None:
     cap = make_capturing_cc(settings, handler=_handler(["A"]))
     result = await run_describe_dataverse(cap.client, settings, dataverse="yelp")
