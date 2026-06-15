@@ -26,10 +26,17 @@ async def run_analyze_dataverse(
     client: CCClient,
     settings: Settings,
     *,
-    dataverse: str,
+    dataverse: str | None = None,
     dataset: str | None = None,
 ) -> str:
-    """Compose the analyze_dataverse prompt text for ``dataverse``."""
+    """Compose the analyze_dataverse prompt text for ``dataverse``.
+
+    ``dataverse`` is optional so the prompt is usable in clients that invoke it
+    without first collecting arguments; when omitted the prompt returns guidance
+    on how to choose one rather than failing.
+    """
+    if not dataverse:
+        return _needs_dataverse_text()
     listing = await run_list_datasets(client, settings, dataverse=dataverse)
     if listing.is_error:
         return _error_text(dataverse, listing.structured)
@@ -101,6 +108,15 @@ def compose_analyze_dataverse(
 def _format_name_list(names: list[str | None]) -> str:
     rendered = [f"- `{n}`" for n in names if n]
     return "\n".join(rendered) if rendered else "- (none)"
+
+
+def _needs_dataverse_text() -> str:
+    return (
+        "# Explore a Dataverse\n\n"
+        "No `dataverse` was provided. Call list_dataverses to see what exists, then "
+        "re-invoke analyze_dataverse with a `dataverse` argument (and optionally a "
+        "`dataset`) to embed its inventory and schema."
+    )
 
 
 def _error_text(dataverse: str, structured: dict[str, Any]) -> str:

@@ -828,9 +828,14 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
 
     # Prompts
 
+    # Prompt arguments are all optional: some clients invoke prompts/get without
+    # collecting argument values first, and a required arg makes the whole prompt
+    # fail there. Each composer degrades to placeholder guidance when an argument
+    # is missing, so every prompt is usable in any client.
+
     @mcp.prompt(name="analyze_dataverse", description=ANALYZE_DATAVERSE_DESCRIPTION)
     async def analyze_dataverse(
-        dataverse: str,
+        dataverse: str | None = None,
         dataset: str | None = None,
     ) -> str:
         return await run_analyze_dataverse(
@@ -842,8 +847,8 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         description="Scaffold a GROUP BY + HAVING aggregation, columnar-aware.",
     )
     async def build_aggregation_query(
-        dataverse: str,
-        dataset: str,
+        dataverse: str | None = None,
+        dataset: str | None = None,
         group_by: str | None = None,
         metric: str | None = None,
     ) -> str:
@@ -860,21 +865,25 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         name="recommend_indexes",
         description="Chain check_index_usage into an index recommendation.",
     )
-    async def recommend_indexes(dataverse: str, dataset: str) -> str:
+    async def recommend_indexes(
+        dataverse: str | None = None, dataset: str | None = None
+    ) -> str:
         return compose_recommend_indexes(dataverse, dataset)
 
     @mcp.prompt(
         name="explore_nested_data",
         description="Guide UNNEST / OBJECT_NAMES traversal of nested documents.",
     )
-    async def explore_nested_data(dataverse: str, dataset: str) -> str:
+    async def explore_nested_data(
+        dataverse: str | None = None, dataset: str | None = None
+    ) -> str:
         return compose_explore_nested_data(dataverse, dataset)
 
     @mcp.prompt(
         name="explain_error",
         description="Translate an AsterixDB error into cause and fix.",
     )
-    async def explain_error(error: str) -> str:
+    async def explain_error(error: str | None = None) -> str:
         return compose_explain_error(error)
 
     # Argument completion (prompts and resource templates)
