@@ -130,6 +130,12 @@ def _query(dataverse: str | None) -> tuple[str, dict[str, Any]]:
     return base + order, {}
 
 
+# Cap on how many names are spelled out in the human-readable text so a wide page
+# (limit up to 500) cannot bloat the content block; the full list is always in
+# structuredContent.datasets.
+_MAX_NAMES_IN_TEXT = 30
+
+
 def _summarize(structured: dict[str, Any]) -> str:
     scope = (
         f"in Dataverse {structured['dataverseFilter']}"
@@ -143,4 +149,26 @@ def _summarize(structured: dict[str, Any]) -> str:
         if structured["nameCollisions"]
         else ""
     )
-    return f"{shown} of {structured['totalDatasets']} dataset(s) {scope}{more}.{collision}"
+    head = f"{shown} of {structured['totalDatasets']} dataset(s) {scope}"
+    if shown == 0:
+        return f"{head}{more}.{collision}"
+    return f"{head}{more}: {_name_list(structured)}.{collision}"
+
+
+def _name_list(structured: dict[str, Any]) -> str:
+    """Comma-joined dataset names for the text block, bounded and qualified.
+
+    Names are qualified as ``dataverse.dataset`` only when the listing spans all
+    dataverses (no filter), so a scoped listing stays terse. Beyond the cap, the
+    remainder is summarized as ``+N more`` (full list is in structuredContent).
+    """
+    qualify = structured["dataverseFilter"] is None
+    datasets = structured["datasets"]
+    names: list[str] = []
+    for summary in datasets[:_MAX_NAMES_IN_TEXT]:
+        name = str(summary.get("dataset"))
+        dataverse = summary.get("dataverse")
+        names.append(f"{dataverse}.{name}" if qualify and dataverse else name)
+    joined = ", ".join(names)
+    remaining = len(datasets) - _MAX_NAMES_IN_TEXT
+    return f"{joined}, +{remaining} more" if remaining > 0 else joined

@@ -41,6 +41,37 @@ async def test_summarizes_each_dataset(settings: Settings) -> None:
     assert result.structured["datasets"][1]["format"] == "COLUMNAR"
 
 
+async def test_text_lists_dataset_names_when_scoped(settings: Settings) -> None:
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": _datasets(2)})
+    result = await run_list_datasets(cap.client, settings, dataverse="DV")
+    # Names must be in the text block, not only structuredContent, so a client
+    # that surfaces text can still answer "which datasets?". Scoped => bare names.
+    assert "ds0" in result.text
+    assert "ds1" in result.text
+    assert "DV.ds0" not in result.text
+
+
+async def test_text_qualifies_names_across_dataverses(settings: Settings) -> None:
+    rows = [_record("Sales", "Orders"), _record("Shop", "Orders")]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    result = await run_list_datasets(cap.client, settings)
+    # No filter => qualify with the dataverse to disambiguate same-named datasets.
+    assert "Sales.Orders" in result.text
+    assert "Shop.Orders" in result.text
+
+
+async def test_text_caps_names_with_more_suffix(settings: Settings) -> None:
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": _datasets(40)})
+    result = await run_list_datasets(cap.client, settings, dataverse="DV", limit=40)
+    assert "+10 more" in result.text  # 40 shown, cap 30
+
+
+async def test_empty_listing_text_has_no_name_list(settings: Settings) -> None:
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    result = await run_list_datasets(cap.client, settings, dataverse="DV")
+    assert result.text == "0 of 0 dataset(s) in Dataverse DV."
+
+
 async def test_pagination_reports_more_available(settings: Settings) -> None:
     cap = make_capturing_cc(settings, response_json={"status": "success", "results": _datasets(5)})
     result = await run_list_datasets(cap.client, settings, offset=0, limit=2)
