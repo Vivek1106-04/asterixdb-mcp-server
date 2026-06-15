@@ -26,7 +26,9 @@ def read_sqlpp_syntax() -> dict[str, Any]:
         {
             "rules": [
                 "Qualify datasets as Dataverse.Dataset (do not backtick the whole dotted name).",
-                "Backtick only reserved-word identifiers, e.g. `Dataset`.",
+                "Backtick reserved-word identifiers, including field names and "
+                "aliases — e.g. d.`time`, d.`type`, AS `value`. Common reserved "
+                "words: value, type, time, order, group, user, key.",
                 "SELECT VALUE expr returns bare values; SELECT a, b returns objects.",
                 "Always include a LIMIT on exploratory SELECTs.",
                 "Nested fields use dot-notation: d.address.city.",
