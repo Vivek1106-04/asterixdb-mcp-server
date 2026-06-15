@@ -29,12 +29,12 @@ Steps:
 
 Template (fill the placeholders):
 ```sql
-SELECT g.__GROUP__ AS grp, __METRIC__ AS value
+SELECT g.__GROUP__ AS grp, __METRIC__ AS metric_value
 FROM __DATAVERSE__.__DATASET__ AS g
 WHERE <row-level predicate>          -- optional, prunes rows before grouping
 GROUP BY g.__GROUP__
 HAVING __METRIC__ > <threshold>      -- optional, filters groups
-ORDER BY value DESC
+ORDER BY metric_value DESC
 LIMIT 20;
 ```"""
 

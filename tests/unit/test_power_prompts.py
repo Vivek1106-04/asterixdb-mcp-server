@@ -25,6 +25,15 @@ def test_build_aggregation_without_optional_args() -> None:
     assert "<the metric" in text
 
 
+def test_build_aggregation_avoids_reserved_word_alias() -> None:
+    # `value` is reserved in SQL++ (VALUE); using it as an alias makes the
+    # scaffolded query fail with ASX1001. The template must use a safe alias.
+    text = compose_build_aggregation_query("DV", "DS")
+    assert "AS value" not in text
+    assert "ORDER BY value" not in text
+    assert "AS metric_value" in text
+
+
 def test_analyze_query_performance_with_statement() -> None:
     text = compose_analyze_query_performance("SELECT 1;")
     assert "SELECT 1;" in text
