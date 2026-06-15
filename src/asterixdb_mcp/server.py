@@ -328,19 +328,50 @@ class _ClientHolder:
 def _to_call_tool_result(result: ToolResult) -> types.CallToolResult:
     """Convert an SDK-agnostic ToolResult to an MCP CallToolResult.
 
-    An MCP client validates ``structuredContent`` against the tool's advertised
-    ``outputSchema``, which describes a *successful* result. An error envelope
-    has none of that shape (no ``results``, no ``rowsReturned``, ...), so sending
-    it as structured content makes a validating client reject the call and mask
-    the real classified error. Errors therefore carry no structured content; the
-    ``errorType`` and message live in the text content instead.
+    Two MCP realities shape this:
+
+    1. Many clients (e.g. Antigravity) render only ``content[].text`` and ignore
+       ``structuredContent``. If the payload lived only in structured content,
+       those clients would see a bare summary like "Returned 5 row(s)." and no
+       rows. So on success the structured payload is also serialized into the text
+       block, making every tool usable by text-first AND structured clients alike.
+       The payload is already egress-bounded (rows/bytes-to-LLM caps), so this
+       cannot blow up the context window.
+    2. A client validates ``structuredContent`` against the tool's advertised
+       ``outputSchema``, which describes a *successful* result. An error envelope
+       has none of that shape, so sending it as structured content makes a
+       validating client reject the call and mask the real classified error.
+       Errors therefore carry no structured content and no JSON mirror; the
+       ``errorType`` and message live in the text content alone.
     """
-    structured = None if result.is_error else result.structured
+    if result.is_error:
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=result.text)],
+            structuredContent=None,
+            isError=True,
+        )
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=result.text)],
-        structuredContent=structured,
-        isError=result.is_error,
+        content=[types.TextContent(type="text", text=_text_with_payload(result))],
+        structuredContent=result.structured,
+        isError=False,
     )
+
+
+def _text_with_payload(result: ToolResult) -> str:
+    """Summary text plus the structured payload as a fenced JSON block.
+
+    Mirrors the machine-readable result into the human/LLM-readable text so
+    clients that ignore ``structuredContent`` still receive the full data.
+    """
+    if not result.structured:
+        return result.text
+    # Compact separators keep the mirrored text aligned with the egress byte
+    # budget, which accounts for rows as compact JSON; indenting would inflate the
+    # size past the intended max-bytes-to-LLM ceiling.
+    payload = json.dumps(
+        result.structured, default=str, ensure_ascii=False, separators=(",", ":")
+    )
+    return f"{result.text}\n\n```json\n{payload}\n```"
 
 
 def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> FastMCP:
