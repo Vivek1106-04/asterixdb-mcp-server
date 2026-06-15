@@ -12,8 +12,9 @@ LLM-facing contract.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Protocol, cast
 
 import httpx
 from mcp import types
@@ -70,9 +71,11 @@ from .tools.get_cluster_status import run_get_cluster_status
 from .tools.get_node_details import run_get_node_details
 from .tools.get_reference import run_get_reference
 from .tools.get_schema import run_get_schema
+from .tools.health_check import run_database_health_check
 from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
+from .tools.query_history import record_query, run_get_query_history
 from .tools.sample_dataset import run_sample_dataset
 from .tools.search_metadata import run_search_metadata
 
@@ -254,6 +257,48 @@ GET_REFERENCE_DESCRIPTION = (
     "once. This is the authoritative in-gateway documentation — prefer it over guessing syntax."
 )
 
+DATABASE_HEALTH_CHECK_DESCRIPTION = (
+    "Scan the metadata catalog for schema-level health issues and return ranked findings. "
+    "Read-only and metadata-only (no workload is run): it reports DUPLICATE_INDEX (two secondary "
+    "indexes with the same structure and key fields — drop the extra), REDUNDANT_INDEX (an index "
+    "whose key fields are a prefix of a longer same-structure index), and "
+    "ROW_DATASET_COLUMNAR_CANDIDATE (an internal ROW dataset that may benefit from COLUMNAR "
+    "storage for analytical scans). Optionally scope to one `dataverse`; the system Metadata "
+    "dataverse is never reported. Each finding carries a severity (high/medium/low) and a plain "
+    "fix. Workload-driven advice (unused indexes, un-indexed filtered fields) is NOT covered "
+    "here — use get_query_history and the recommend_indexes prompt for that."
+)
+
+GET_QUERY_HISTORY_DESCRIPTION = (
+    "List the queries run in THIS session, newest first, with their outcome — for self-"
+    "debugging. Each entry has the tool used, the statement, the outcome (SUCCESS/ERROR/"
+    "SUBMITTED), and on failure the classified errorType and message. Set `failuresOnly:true` to "
+    "see only the calls that failed, e.g. to recall the exact error before retrying. Reads "
+    "in-gateway memory only (no cluster call); the history is session-scoped and expires with the "
+    "audit-log TTL, so it shows recent activity rather than a full log."
+)
+
+
+# The FastMCP.completion() decorator ships unannotated, so mypy flags every
+# handler it wraps as untyped. The handler IS fully typed; the gap is in the SDK.
+# A narrow Protocol describes the typed shape of completion() and a cast applies
+# it at the single registration site, keeping the boundary honest without a blanket
+# ignore. The other decorators (tool/resource/prompt) are typed in the SDK already.
+_CompletionHandler = Callable[
+    [
+        types.PromptReference | types.ResourceTemplateReference,
+        types.CompletionArgument,
+        types.CompletionContext | None,
+    ],
+    Awaitable[types.Completion | None],
+]
+
+
+class _SupportsCompletion(Protocol):
+    """The typed slice of FastMCP we rely on for completion registration."""
+
+    def completion(self) -> Callable[[_CompletionHandler], _CompletionHandler]: ...
+
 
 @dataclass
 class _ClientHolder:
@@ -360,6 +405,12 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
                 )
         except GatewayError as err:
             result = ToolResult.error(err)
+        # Record the call's outcome so get_query_history can surface it for
+        # self-debugging (success and failure alike).
+        record_query(
+            audit, settings, tool="execute_query", statement=statement,
+            dataverse=dataverse, result=result,
+        )
         return _to_call_tool_result(result)
 
     @mcp.tool(name="get_schema", description=GET_SCHEMA_DESCRIPTION,
@@ -610,6 +661,29 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     ) -> types.CallToolResult:
         return _to_call_tool_result(run_get_reference(topic))
 
+    @mcp.tool(name="database_health_check", description=DATABASE_HEALTH_CHECK_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["database_health_check"])
+    async def database_health_check(
+        dataverse: Annotated[
+            str | None, Field(description="Optional dataverse to scope the scan to.")
+        ] = None,
+    ) -> types.CallToolResult:
+        result = await run_database_health_check(_client(), settings, dataverse=dataverse)
+        return _to_call_tool_result(result)
+
+    @mcp.tool(name="get_query_history", description=GET_QUERY_HISTORY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_query_history"])
+    async def get_query_history(
+        limit: Annotated[int, Field(ge=1, le=100, description="Max entries to return.")] = 20,
+        failuresOnly: Annotated[
+            bool, Field(description="If true, return only calls that failed.")
+        ] = False,
+    ) -> types.CallToolResult:
+        result = await run_get_query_history(
+            audit, settings, limit=limit, failures_only=failuresOnly
+        )
+        return _to_call_tool_result(result)
+
     # Resources
 
     @mcp.resource("asterixdb://version", name="AsterixDB Version", mime_type="application/json")
@@ -774,7 +848,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
 
     # Argument completion (prompts and resource templates)
 
-    @mcp.completion()
+    # Bind the decorator through the typed Protocol boundary (see
+    # _SupportsCompletion) so the handler below stays a typed decorator target.
+    completion_decorator = cast(_SupportsCompletion, mcp).completion()
+
+    @completion_decorator
     async def complete(
         ref: types.PromptReference | types.ResourceTemplateReference,
         argument: types.CompletionArgument,

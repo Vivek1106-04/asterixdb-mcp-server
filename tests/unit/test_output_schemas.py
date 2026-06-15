@@ -27,6 +27,8 @@ EXPECTED_TOOLS = {
     "get_cluster_status",
     "get_node_details",
     "get_reference",
+    "database_health_check",
+    "get_query_history",
 }
 
 

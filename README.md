@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio)──▶  AsterixDB MCP Gateway  ──HTTP──�
 
 ## Capabilities
 
-**19 tools, 11 resources, 4 resource templates, 6 prompts.** Tools perform
+**21 tools, 11 resources, 4 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -63,6 +63,8 @@ a failed call to be rejected.
 | Functions | `get_function` | One function's signature, with near-name hints on a miss. |
 | Cluster | `get_cluster_status` | Live cluster state and node roster. |
 | Cluster | `get_node_details` | Per-node diagnostics for a validated node id. |
+| Health | `database_health_check` | Metadata scan for duplicate/redundant indexes and ROW-vs-COLUMNAR candidates. |
+| Health | `get_query_history` | Recent session queries with outcome and classified error, for self-debugging. |
 | Docs | `get_reference` | SQL++ reference docs by topic. |
 
 ### Resources

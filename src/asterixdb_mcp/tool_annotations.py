@@ -47,6 +47,7 @@ _LIVE_READ_ONLY = {
     "search_metadata": "Search Metadata Catalog",
     "get_cluster_status": "Get Cluster Status",
     "get_node_details": "Get Node Details",
+    "database_health_check": "Database Health Check",
 }
 
 
@@ -90,6 +91,16 @@ TOOL_ANNOTATIONS["cancel_query"] = ToolAnnotations(
 # reaches the cluster, so it is a closed-world read.
 TOOL_ANNOTATIONS["get_reference"] = ToolAnnotations(
     title="Read SQL++ Reference",
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+# get_query_history reads the in-gateway audit log; like get_reference it never
+# reaches the cluster, so it is a closed-world read.
+TOOL_ANNOTATIONS["get_query_history"] = ToolAnnotations(
+    title="Get Query History",
     readOnlyHint=True,
     destructiveHint=False,
     idempotentHint=True,

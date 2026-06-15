@@ -68,6 +68,8 @@ async def test_advertises_exactly_the_expected_tools(server) -> None:
         "get_cluster_status",
         "get_node_details",
         "get_reference",
+        "database_health_check",
+        "get_query_history",
     }
 
 
@@ -222,7 +224,7 @@ async def test_each_resource_template_reads_through_the_server() -> None:
         "asterixdb://datasets/Sales",
     ):
         contents = await server.read_resource(uri)
-        body = list(contents)[0].content
+        body = next(iter(contents)).content
         assert "status" in body, uri
 
 

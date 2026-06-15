@@ -24,6 +24,8 @@ EXPECTED_TOOLS = {
     "get_cluster_status",
     "get_node_details",
     "get_reference",
+    "database_health_check",
+    "get_query_history",
 }
 
 
@@ -40,9 +42,11 @@ def test_only_cancel_query_is_not_read_only() -> None:
     assert not_read_only == {"cancel_query"}
 
 
-def test_only_get_reference_is_closed_world() -> None:
+def test_only_in_gateway_reads_are_closed_world() -> None:
+    # Closed-world tools never reach the cluster: static reference docs and the
+    # in-gateway query-history log.
     closed = {n for n, a in TOOL_ANNOTATIONS.items() if a.openWorldHint is False}
-    assert closed == {"get_reference"}
+    assert closed == {"get_reference", "get_query_history"}
 
 
 def test_only_submit_async_query_is_not_idempotent() -> None:

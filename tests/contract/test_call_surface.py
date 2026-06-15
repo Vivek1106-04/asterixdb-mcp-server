@@ -478,6 +478,39 @@ async def test_error_result_ships_no_structured_content() -> None:
     assert result.content[0].text.split(":")[0].isupper()
 
 
+async def test_database_health_check_call_returns_findings() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        statement = parse_qs(req.content.decode()).get("statement", [""])[0]
+        if "Metadata.`Index`" in statement:
+            return httpx.Response(200, json={"status": "success", "results": [
+                {"IndexName": "a", "DatasetName": "Orders", "DataverseName": "S",
+                 "IndexStructure": "BTREE", "SearchKey": [["city"]], "IsPrimary": False},
+                {"IndexName": "b", "DatasetName": "Orders", "DataverseName": "S",
+                 "IndexStructure": "BTREE", "SearchKey": [["city"]], "IsPrimary": False},
+            ]})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool("database_health_check", {})
+    assert result.isError is False
+    assert result.structuredContent["findingsCount"] == 1
+
+
+async def test_query_history_records_and_returns_execute_query() -> None:
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": [{"n": 1}]})
+
+    server = _server_with_mock(handler)
+    await server.call_tool("execute_query", {"statement": "SELECT 1;"})
+    history = await server.call_tool("get_query_history", {})
+    assert history.isError is False
+    assert history.structuredContent["count"] == 1
+    entry = history.structuredContent["queries"][0]
+    assert entry["tool"] == "execute_query"
+    assert entry["outcome"] == "SUCCESS"
+    assert entry["statement"] == "SELECT 1;"
+
+
 def test_main_builds_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     from mcp.server.fastmcp import FastMCP
 

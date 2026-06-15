@@ -20,7 +20,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..audit_log import AuditEntry, AuditLog
+from ..audit_log import OUTCOME_SUBMITTED, AuditEntry, AuditLog
 from ..cc_client import HANDLE_FIELD, STATUS_FIELD, CCClient
 from ..compiler_params import validate_compiler_parameters
 from ..config import Settings
@@ -110,6 +110,8 @@ async def run_submit_async_query(
             dataverse=dataverse,
             signature=compiled.get("signature"),
             advisory=advisory_payload,
+            tool="submit_async_query",
+            outcome=OUTCOME_SUBMITTED,
         )
     )
 
