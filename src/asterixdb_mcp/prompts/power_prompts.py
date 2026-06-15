@@ -19,7 +19,9 @@ Goal: produce a correct, columnar-aware GROUP BY query.
 
 Steps:
 1. Call get_schema for __DATAVERSE__.__DATASET__ and copy exact field names
-   (casing matters). Note `datasetFormatInfo.format`.
+   (casing matters). Note `datasetFormatInfo.format`. If a field name is a
+   reserved word (e.g. time, type, value, order, group), wrap it in backticks
+   everywhere it appears: g.`time`.
 2. Project only the grouping key(s) and the aggregate — never select every column.
 3. Use AsterixDB aggregate names: COUNT, SUM, AVG, MIN, MAX, STDDEV_SAMP,
    STDDEV_POP, VAR_SAMP, VAR_POP, ARRAY_AGG. Do NOT nest one aggregate inside
@@ -115,7 +117,8 @@ Steps:
    UNNEST d.<arrayField> AS item
    LIMIT 20;
    ```
-4. Reach into nested objects with dot-notation: `d.address.city`.
+4. Reach into nested objects with dot-notation: `d.address.city`. Backtick any
+   path segment that is a reserved word: d.`time`, d.payload.`type`.
 5. Always keep a LIMIT while exploring; nested UNNEST can multiply row counts."""
 
 

@@ -34,6 +34,15 @@ def test_build_aggregation_avoids_reserved_word_alias() -> None:
     assert "AS metric_value" in text
 
 
+def test_field_prompts_warn_to_backtick_reserved_words() -> None:
+    # borg.machine_events has a `time` key field, which is reserved; the prompt
+    # must tell the agent to backtick reserved-word field names.
+    agg = compose_build_aggregation_query("DV", "DS")
+    assert "backticks" in agg and "g.`time`" in agg
+    nested = compose_explore_nested_data("DV", "DS")
+    assert "Backtick" in nested and "`time`" in nested
+
+
 def test_analyze_query_performance_with_statement() -> None:
     text = compose_analyze_query_performance("SELECT 1;")
     assert "SELECT 1;" in text

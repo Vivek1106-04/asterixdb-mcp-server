@@ -18,6 +18,9 @@ def test_sqlpp_syntax() -> None:
     assert ref["reference"] == "sqlpp-syntax"
     assert ref["version"] == REFERENCE_VERSION
     assert any("LIMIT" in rule for rule in ref["rules"])
+    # Reserved-word backticking guidance must name field names/aliases, not just
+    # dataset identifiers (e.g. a `time` field would otherwise fail with ASX1001).
+    assert any("`value`" in rule or "`time`" in rule for rule in ref["rules"])
 
 
 def test_builtin_functions_lists_aggregates() -> None:
