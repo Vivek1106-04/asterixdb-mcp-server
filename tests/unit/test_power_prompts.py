@@ -52,3 +52,16 @@ def test_explain_error() -> None:
     text = compose_explain_error("ASX1077: Cannot find dataset Foo")
     assert "ASX1077" in text
     assert "list_datasets" in text or "search_metadata" in text
+
+
+def test_prompts_degrade_to_placeholders_without_args() -> None:
+    # Every prompt must render usable guidance when invoked with no arguments,
+    # so clients that call prompts/get without collecting args don't get an error.
+    agg = compose_build_aggregation_query()
+    assert "<dataverse>.<dataset>" in agg
+    rec = compose_recommend_indexes()
+    assert "<dataverse>.<dataset>" in rec
+    nested = compose_explore_nested_data()
+    assert "<dataverse>.<dataset>" in nested
+    err = compose_explain_error()
+    assert "<paste the AsterixDB error" in err

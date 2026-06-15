@@ -44,6 +44,17 @@ async def test_run_prompts_for_dataset_on_large_dataverse(settings: Settings) ->
     assert "specific `dataset`" in text
 
 
+async def test_run_without_dataverse_returns_guidance_and_no_cc_call(
+    settings: Settings,
+) -> None:
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    text = await run_analyze_dataverse(cap.client, settings)
+    assert "No `dataverse` was provided" in text
+    assert "list_dataverses" in text
+    # A missing argument must not hit the cluster.
+    assert cap.requests == []
+
+
 async def test_run_returns_error_text_when_listing_fails(settings: Settings) -> None:
     body = {"status": "fatal", "errors": [{"code": "ASX0", "msg": "down"}]}
     cap = make_capturing_cc(settings, response_json=body)

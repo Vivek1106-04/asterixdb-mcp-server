@@ -40,14 +40,17 @@ LIMIT 20;
 
 
 def compose_build_aggregation_query(
-    dataverse: str, dataset: str, group_by: str | None = None, metric: str | None = None
+    dataverse: str | None = None,
+    dataset: str | None = None,
+    group_by: str | None = None,
+    metric: str | None = None,
 ) -> str:
     """Scaffold a GROUP BY + HAVING aggregation against one dataset."""
     group_hint = group_by or "<the grouping field>"
     metric_hint = metric or "<the metric, e.g. COUNT(*), AVG(field)>"
     body = (
-        _BUILD_AGGREGATION_TEMPLATE.replace("__DATAVERSE__", dataverse)
-        .replace("__DATASET__", dataset)
+        _BUILD_AGGREGATION_TEMPLATE.replace("__DATAVERSE__", dataverse or "<dataverse>")
+        .replace("__DATASET__", dataset or "<dataset>")
         .replace("__GROUP__", group_hint)
         .replace("__METRIC__", metric_hint)
     )
@@ -72,8 +75,12 @@ Steps:
 4. Re-run after each change and compare metrics; change one thing at a time.{target}"""
 
 
-def compose_recommend_indexes(dataverse: str, dataset: str) -> str:
+def compose_recommend_indexes(
+    dataverse: str | None = None, dataset: str | None = None
+) -> str:
     """Chain check_index_usage into a CREATE INDEX recommendation."""
+    dataverse = dataverse or "<dataverse>"
+    dataset = dataset or "<dataset>"
     return f"""\
 # Recommend indexes for {dataverse}.{dataset}
 
@@ -112,16 +119,19 @@ Steps:
 5. Always keep a LIMIT while exploring; nested UNNEST can multiply row counts."""
 
 
-def compose_explore_nested_data(dataverse: str, dataset: str) -> str:
+def compose_explore_nested_data(
+    dataverse: str | None = None, dataset: str | None = None
+) -> str:
     """Guide UNNEST / OBJECT_NAMES traversal of nested documents."""
-    body = _EXPLORE_NESTED_TEMPLATE.replace("__DATAVERSE__", dataverse).replace(
-        "__DATASET__", dataset
-    )
+    body = _EXPLORE_NESTED_TEMPLATE.replace(
+        "__DATAVERSE__", dataverse or "<dataverse>"
+    ).replace("__DATASET__", dataset or "<dataset>")
     return "\n\n".join((body, STORAGE_FORMAT_AWARENESS_BLOCK))
 
 
-def compose_explain_error(error: str) -> str:
+def compose_explain_error(error: str | None = None) -> str:
     """Translate an AsterixDB error code/message into cause + fix."""
+    error = error or "<paste the AsterixDB error code or message here>"
     return f"""\
 # Explain and fix this error
 
