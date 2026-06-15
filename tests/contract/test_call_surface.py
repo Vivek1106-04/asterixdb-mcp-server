@@ -58,7 +58,7 @@ async def test_success_text_mirrors_structured_payload() -> None:
     result = await server.call_tool("execute_query", {"statement": "SELECT 42;"})
     text = result.content[0].text
     assert "```json" in text
-    assert '"n": 42' in text
+    assert '"n":42' in text  # compact separators, no spaces
     # The human summary is still the first line.
     assert text.splitlines()[0].startswith("Returned 1 row(s)")
 

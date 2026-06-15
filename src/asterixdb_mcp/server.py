@@ -365,7 +365,12 @@ def _text_with_payload(result: ToolResult) -> str:
     """
     if not result.structured:
         return result.text
-    payload = json.dumps(result.structured, default=str, ensure_ascii=False, indent=2)
+    # Compact separators keep the mirrored text aligned with the egress byte
+    # budget, which accounts for rows as compact JSON; indenting would inflate the
+    # size past the intended max-bytes-to-LLM ceiling.
+    payload = json.dumps(
+        result.structured, default=str, ensure_ascii=False, separators=(",", ":")
+    )
     return f"{result.text}\n\n```json\n{payload}\n```"
 
 
