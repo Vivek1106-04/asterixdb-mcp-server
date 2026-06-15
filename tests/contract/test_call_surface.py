@@ -47,6 +47,38 @@ async def test_execute_query_call_returns_structured_result() -> None:
     assert result.structuredContent["rowsReturned"] == 1
 
 
+async def test_success_text_mirrors_structured_payload() -> None:
+    # Text-first clients (e.g. Antigravity) render only content[].text. The
+    # structured payload must therefore also appear in the text block so the
+    # actual rows are visible, not just a "Returned N row(s)." summary.
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": [{"n": 42}]})
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool("execute_query", {"statement": "SELECT 42;"})
+    text = result.content[0].text
+    assert "```json" in text
+    assert '"n": 42' in text
+    # The human summary is still the first line.
+    assert text.splitlines()[0].startswith("Returned 1 row(s)")
+
+
+async def test_error_text_has_no_json_mirror() -> None:
+    server = _server_with_mock(lambda r: httpx.Response(500, text="boom"))
+    result = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
+    assert result.isError is True
+    assert result.structuredContent is None
+    assert "```json" not in result.content[0].text
+
+
+def test_text_with_payload_passes_through_empty_structured() -> None:
+    from asterixdb_mcp.server import _text_with_payload
+    from asterixdb_mcp.tools import ToolResult
+
+    # A success result with no structured payload yields the bare summary text.
+    assert _text_with_payload(ToolResult(text="done", structured={})) == "done"
+
+
 async def test_readonly_true_reaches_cc_through_the_tool() -> None:
     seen: list[str] = []
 
