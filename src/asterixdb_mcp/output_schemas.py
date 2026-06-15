@@ -291,6 +291,30 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         },
         description="Curated in-gateway SQL++ reference content for one topic or all topics.",
     ),
+    "database_health_check": _obj(
+        {
+            "status": _STRING,
+            "dataverseFilter": {"type": ["string", "null"]},
+            "datasetsScanned": _INT,
+            "indexesScanned": _INT,
+            "findingsCount": _INT,
+            "checks": {"type": "array"},
+            "findings": _array_of_objects(),
+        },
+        required=("findings", "findingsCount"),
+        description="Schema-level health findings (duplicate/redundant indexes, columnar hints).",
+    ),
+    "get_query_history": _obj(
+        {
+            "status": _STRING,
+            "limit": _INT,
+            "failuresOnly": _BOOL,
+            "count": _INT,
+            "queries": _array_of_objects(),
+        },
+        required=("queries", "count"),
+        description="Recent session queries with outcome and classified error, newest first.",
+    ),
 }
 
 

@@ -22,6 +22,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
+# Recorded terminal outcomes for the observability (query history) projection.
+OUTCOME_SUCCESS = "SUCCESS"
+OUTCOME_ERROR = "ERROR"
+OUTCOME_SUBMITTED = "SUBMITTED"
+
 
 @dataclass(frozen=True)
 class AuditEntry:
@@ -38,6 +43,15 @@ class AuditEntry:
     # Non-fatal columnar full-scan advisory payload captured at submission, so
     # fetch_query_result can minimize output and re-surface the flag.
     advisory: dict[str, Any] | None = None
+    # Observability fields (query history). The tool that recorded this entry, the
+    # terminal outcome, and — on failure — the classified error. These let
+    # get_query_history answer "what did I run and which calls failed" for agent
+    # self-debugging without a second store.
+    tool: str | None = None
+    outcome: str | None = None  # SUCCESS | ERROR | SUBMITTED
+    error_type: str | None = None
+    error_message: str | None = None
+    rows_returned: int | None = None
 
     def with_handle(self, handle: str) -> AuditEntry:
         """Return a copy carrying the CC status handle (immutable update)."""
@@ -59,6 +73,24 @@ class AuditEntry:
             "dataverse": self.dataverse,
             "signature": self.signature,
             "advisories": [self.advisory] if self.advisory else [],
+        }
+
+    def to_history_view(self) -> dict[str, Any]:
+        """Render the observability projection used by get_query_history.
+
+        Lifecycle internals (handles, signature, advisory payload) are omitted;
+        only what an agent needs to recognize and debug a past call is surfaced.
+        """
+        return {
+            "clientContextID": self.client_context_id,
+            "tool": self.tool,
+            "statement": self.statement,
+            "dataverse": self.dataverse,
+            "outcome": self.outcome,
+            "errorType": self.error_type,
+            "errorMessage": self.error_message,
+            "rowsReturned": self.rows_returned,
+            "submittedAt": self.submitted_at,
         }
 
 
@@ -94,6 +126,19 @@ class AuditLog:
     def forget(self, client_context_id: str) -> None:
         """Drop an entry if present (e.g. after a confirmed cancel)."""
         self._entries.pop(client_context_id, None)
+
+    def recent(self, limit: int, *, failures_only: bool = False) -> list[AuditEntry]:
+        """Return up to ``limit`` live entries, newest submission first.
+
+        ``failures_only`` keeps only entries whose recorded outcome is ERROR — the
+        self-debugging view. Pruning runs first so expired entries never surface.
+        """
+        self._prune()
+        entries = list(self._entries.values())
+        if failures_only:
+            entries = [e for e in entries if e.outcome == "ERROR"]
+        entries.sort(key=lambda e: e.submitted_at, reverse=True)
+        return entries[: max(limit, 0)]
 
     def __len__(self) -> int:
         """Live (non-expired) entry count; prunes as a side effect."""
