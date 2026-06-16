@@ -49,9 +49,13 @@ def _hostport(host: str, port: int) -> str:
 def build_transport_security(settings: Settings) -> TransportSecuritySettings:
     """Allowlist the gateway's own host:port (and loopback) for DNS-rebinding checks."""
     port = settings.http_port
-    hosts = {_hostport(host, port) for host in (settings.http_host, *_LOOPBACK_HOSTS)}
+    base_hosts = {_hostport(host, port) for host in (settings.http_host, *_LOOPBACK_HOSTS)}
+    hosts = set(base_hosts)
     hosts.update(settings.http_allowed_hosts)
-    origins = {f"{scheme}://{host}" for host in hosts for scheme in ("http", "https")}
+    # Default origins come only from the bind/loopback hosts. An extra entry in
+    # http_allowed_hosts is for forwarded Host headers and must NOT implicitly
+    # widen the browser-origin allowlist; that requires explicit allowed_origins.
+    origins = {f"{scheme}://{host}" for host in base_hosts for scheme in ("http", "https")}
     origins.update(settings.http_allowed_origins)
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,

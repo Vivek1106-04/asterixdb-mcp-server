@@ -159,6 +159,10 @@ def test_as_int_coerces_only_numbers() -> None:
     assert _as_int(5.0) == 5
     assert _as_int("nope") is None
     assert _as_int(None) is None
+    # bool subclasses int but is not a valid expiry; malformed floats must not raise.
+    assert _as_int(True) is None
+    assert _as_int(float("inf")) is None
+    assert _as_int(float("nan")) is None
 
 
 def test_build_token_verifier_wires_jwks_resolver(monkeypatch: pytest.MonkeyPatch) -> None:

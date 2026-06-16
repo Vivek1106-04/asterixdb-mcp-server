@@ -93,7 +93,14 @@ def _client_id(claims: dict[str, Any]) -> str:
 
 
 def _as_int(value: Any) -> int | None:
-    return int(value) if isinstance(value, (int, float)) else None
+    # JWT claims are untrusted: reject bool (a subclass of int) and guard the
+    # coercion so a malformed exp (NaN, inf) can't bubble up as a 500.
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value) if isinstance(value, (int, float)) else None
+    except (OverflowError, ValueError, TypeError):
+        return None
 
 
 def build_token_verifier(settings: Settings) -> JwtTokenVerifier:

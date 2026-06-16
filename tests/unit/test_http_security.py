@@ -53,6 +53,9 @@ def test_transport_security_includes_configured_extras() -> None:
     sec = build_transport_security(settings)
     assert "mcp.example.com" in sec.allowed_hosts
     assert "https://app.example.com" in sec.allowed_origins
+    # An extra allowed Host must NOT implicitly widen the browser-origin allowlist.
+    assert "http://mcp.example.com" not in sec.allowed_origins
+    assert "https://mcp.example.com" not in sec.allowed_origins
 
 
 def test_validate_allows_loopback_without_auth() -> None:
