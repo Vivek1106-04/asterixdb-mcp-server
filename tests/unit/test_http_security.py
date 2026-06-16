@@ -32,6 +32,17 @@ def test_transport_security_allowlists_own_host_and_loopback() -> None:
     assert "https://127.0.0.1:19200" in sec.allowed_origins
 
 
+def test_transport_security_brackets_ipv6_literals() -> None:
+    # The ::1 loopback (always included) and an IPv6 bind host must be bracketed
+    # per RFC 3986, both in the host allowlist and in the derived origins.
+    settings = Settings(http_host="::1", http_port=19200)
+    sec = build_transport_security(settings)
+    assert "[::1]:19200" in sec.allowed_hosts
+    assert "::1:19200" not in sec.allowed_hosts
+    assert "http://[::1]:19200" in sec.allowed_origins
+    assert "http://::1:19200" not in sec.allowed_origins
+
+
 def test_transport_security_includes_configured_extras() -> None:
     settings = Settings(
         http_host="127.0.0.1",
@@ -81,6 +92,18 @@ def test_validate_oauth_accepts_full_config() -> None:
             oauth_jwks_uri="https://as.example.com/jwks",
         )
     )
+
+
+def test_validate_oauth_rejects_malformed_url() -> None:
+    with pytest.raises(ValueError, match="JWKS_URI must be a valid http"):
+        validate_http_security(
+            Settings(
+                auth_mode="oauth",
+                oauth_issuer="https://as.example.com",
+                oauth_audience="https://mcp.example.com/mcp",
+                oauth_jwks_uri="not-a-url",
+            )
+        )
 
 
 def test_build_auth_none_for_non_oauth() -> None:

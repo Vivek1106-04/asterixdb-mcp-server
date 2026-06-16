@@ -159,8 +159,8 @@ expose the MCP **Streamable HTTP** endpoint for remote / multi-client / web acce
 | `ASTERIXDB_MCP_OAUTH_JWKS_URI` | _(unset)_ | AS JWKS endpoint for token-signature verification. |
 | `ASTERIXDB_MCP_OAUTH_REQUIRED_SCOPES` | `[]` | Scopes a token must carry (JSON list). |
 | `ASTERIXDB_MCP_OAUTH_ALGORITHMS` | `["RS256"]` | Accepted JWT signing algorithms (JSON list). |
-| `ASTERIXDB_MCP_HTTP_ALLOWED_HOSTS` | `[]` | Extra `Host` values to allow (proxy host). |
-| `ASTERIXDB_MCP_HTTP_ALLOWED_ORIGINS` | `[]` | Extra `Origin` values to allow (browser origin). |
+| `ASTERIXDB_MCP_HTTP_ALLOWED_HOSTS` | `[]` | Extra `Host` values to allow (proxy host; include `:port` when non-default). |
+| `ASTERIXDB_MCP_HTTP_ALLOWED_ORIGINS` | `[]` | Extra `Origin` values to allow (browser origin, scheme + host[:port]). |
 
 A `GET /health` liveness probe is served unauthenticated and returns
 `{"status":"ok"}` (no cluster call, no version disclosure).

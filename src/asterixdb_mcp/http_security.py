@@ -39,10 +39,17 @@ def is_loopback_host(host: str) -> bool:
     return host in _LOOPBACK_HOSTS
 
 
+def _hostport(host: str, port: int) -> str:
+    """Format a host:port, bracketing IPv6 literals per RFC 3986 ([::1]:19200)."""
+    if host.count(":") >= 2 and not host.startswith("["):
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
 def build_transport_security(settings: Settings) -> TransportSecuritySettings:
     """Allowlist the gateway's own host:port (and loopback) for DNS-rebinding checks."""
     port = settings.http_port
-    hosts = {f"{host}:{port}" for host in (settings.http_host, *_LOOPBACK_HOSTS)}
+    hosts = {_hostport(host, port) for host in (settings.http_host, *_LOOPBACK_HOSTS)}
     hosts.update(settings.http_allowed_hosts)
     origins = {f"{scheme}://{host}" for host in hosts for scheme in ("http", "https")}
     origins.update(settings.http_allowed_origins)
@@ -87,14 +94,22 @@ def _validate_bearer(settings: Settings) -> None:
 
 
 def _validate_oauth(settings: Settings) -> None:
-    missing = [
-        name
-        for name, value in (
-            ("ASTERIXDB_MCP_OAUTH_ISSUER", settings.oauth_issuer),
-            ("ASTERIXDB_MCP_OAUTH_AUDIENCE", settings.oauth_audience),
-            ("ASTERIXDB_MCP_OAUTH_JWKS_URI", settings.oauth_jwks_uri),
-        )
-        if not value
-    ]
+    fields = (
+        ("ASTERIXDB_MCP_OAUTH_ISSUER", settings.oauth_issuer),
+        ("ASTERIXDB_MCP_OAUTH_AUDIENCE", settings.oauth_audience),
+        ("ASTERIXDB_MCP_OAUTH_JWKS_URI", settings.oauth_jwks_uri),
+    )
+    missing = [name for name, value in fields if not value]
     if missing:
         raise ValueError("auth_mode='oauth' requires these settings: " + ", ".join(missing))
+    # Fail fast on a malformed URL with a config-focused error rather than a later,
+    # less actionable failure inside PyJWKClient / JWT verification.
+    for name, value in fields:
+        _require_http_url(name, value)
+
+
+def _require_http_url(name: str, value: str) -> None:
+    try:
+        _HTTP_URL.validate_python(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a valid http(s) URL, got {value!r}.") from exc
