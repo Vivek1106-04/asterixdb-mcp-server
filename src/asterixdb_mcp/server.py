@@ -26,6 +26,7 @@ from .cc_client import CCClient
 from .completions import complete_argument
 from .config import Settings, load_settings
 from .errors import GatewayError
+from .http_security import build_auth, build_transport_security, validate_http_security
 from .output_schemas import apply_output_schemas
 from .permits import PermitPools
 from .prompts.analyze_dataverse import run_analyze_dataverse
@@ -368,9 +369,7 @@ def _text_with_payload(result: ToolResult) -> str:
     # Compact separators keep the mirrored text aligned with the egress byte
     # budget, which accounts for rows as compact JSON; indenting would inflate the
     # size past the intended max-bytes-to-LLM ceiling.
-    payload = json.dumps(
-        result.structured, default=str, ensure_ascii=False, separators=(",", ":")
-    )
+    payload = json.dumps(result.structured, default=str, ensure_ascii=False, separators=(",", ":"))
     return f"{result.text}\n\n```json\n{payload}\n```"
 
 
@@ -390,15 +389,33 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     audit = AuditLog(settings.audit_log_ttl_s)
     pools = PermitPools.from_settings(settings)
 
-    mcp = FastMCP("asterixdb-mcp-server")
+    # Host/port/path are read by the Streamable HTTP transport (transport='http');
+    # they are inert under stdio. For http we also fail fast on an unsafe config,
+    # enable DNS-rebinding protection, and wire oauth resource-server auth.
+    mcp_kwargs: dict[str, Any] = {
+        "host": settings.http_host,
+        "port": settings.http_port,
+        "streamable_http_path": settings.http_path,
+    }
+    if settings.transport == "http":
+        validate_http_security(settings)
+        mcp_kwargs["transport_security"] = build_transport_security(settings)
+        auth, token_verifier = build_auth(settings)
+        if auth is not None:
+            mcp_kwargs["auth"] = auth
+            mcp_kwargs["token_verifier"] = token_verifier
+    mcp = FastMCP("asterixdb-mcp-server", **mcp_kwargs)
 
     def _client() -> CCClient:
         return holder.get()
 
     # Tools
 
-    @mcp.tool(name="execute_query", description=EXECUTE_QUERY_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["execute_query"])
+    @mcp.tool(
+        name="execute_query",
+        description=EXECUTE_QUERY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["execute_query"],
+    )
     async def execute_query(
         statement: Annotated[str, Field(description="Pure SQL++ statement, no SET prefix.")],
         dataverse: Annotated[
@@ -439,13 +456,20 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         # Record the call's outcome so get_query_history can surface it for
         # self-debugging (success and failure alike).
         record_query(
-            audit, settings, tool="execute_query", statement=statement,
-            dataverse=dataverse, result=result,
+            audit,
+            settings,
+            tool="execute_query",
+            statement=statement,
+            dataverse=dataverse,
+            result=result,
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="get_schema", description=GET_SCHEMA_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["get_schema"])
+    @mcp.tool(
+        name="get_schema",
+        description=GET_SCHEMA_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_schema"],
+    )
     async def get_schema(
         dataverse: Annotated[str, Field(description="Dataverse containing the dataset.")],
         dataset: Annotated[str, Field(description="Dataset to describe.")],
@@ -453,14 +477,20 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         result = await run_get_schema(_client(), settings, dataverse=dataverse, dataset=dataset)
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="list_dataverses", description=LIST_DATAVERSES_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["list_dataverses"])
+    @mcp.tool(
+        name="list_dataverses",
+        description=LIST_DATAVERSES_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["list_dataverses"],
+    )
     async def list_dataverses() -> types.CallToolResult:
         result = await run_list_dataverses(_client(), settings)
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="list_datasets", description=LIST_DATASETS_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["list_datasets"])
+    @mcp.tool(
+        name="list_datasets",
+        description=LIST_DATASETS_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["list_datasets"],
+    )
     async def list_datasets(
         dataverse: Annotated[str | None, Field(description="Optional Dataverse filter.")] = None,
         offset: Annotated[int, Field(ge=0, description="Page offset.")] = 0,
@@ -471,16 +501,22 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="describe_dataverse", description=DESCRIBE_DATAVERSE_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["describe_dataverse"])
+    @mcp.tool(
+        name="describe_dataverse",
+        description=DESCRIBE_DATAVERSE_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["describe_dataverse"],
+    )
     async def describe_dataverse(
         dataverse: Annotated[str, Field(description="Dataverse to describe in full.")],
     ) -> types.CallToolResult:
         result = await run_describe_dataverse(_client(), settings, dataverse=dataverse)
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="sample_dataset", description=SAMPLE_DATASET_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["sample_dataset"])
+    @mcp.tool(
+        name="sample_dataset",
+        description=SAMPLE_DATASET_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["sample_dataset"],
+    )
     async def sample_dataset(
         dataverse: Annotated[str, Field(description="Dataverse containing the dataset.")],
         dataset: Annotated[str, Field(description="Dataset to sample.")],
@@ -493,8 +529,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
 
     # Async query lifecycle tools
 
-    @mcp.tool(name="submit_async_query", description=SUBMIT_ASYNC_QUERY_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["submit_async_query"])
+    @mcp.tool(
+        name="submit_async_query",
+        description=SUBMIT_ASYNC_QUERY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["submit_async_query"],
+    )
     async def submit_async_query(
         statement: Annotated[str, Field(description="Pure SQL++ statement, no SET prefix.")],
         dataverse: Annotated[
@@ -516,8 +555,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="wait_on_async_query", description=WAIT_ON_ASYNC_QUERY_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["wait_on_async_query"])
+    @mcp.tool(
+        name="wait_on_async_query",
+        description=WAIT_ON_ASYNC_QUERY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["wait_on_async_query"],
+    )
     async def wait_on_async_query(
         clientContextID: Annotated[
             str, Field(description="clientContextID returned by submit_async_query.")
@@ -537,8 +579,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="fetch_query_result", description=FETCH_QUERY_RESULT_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["fetch_query_result"])
+    @mcp.tool(
+        name="fetch_query_result",
+        description=FETCH_QUERY_RESULT_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["fetch_query_result"],
+    )
     async def fetch_query_result(
         clientContextID: Annotated[
             str, Field(description="clientContextID returned by submit_async_query.")
@@ -556,8 +601,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="cancel_query", description=CANCEL_QUERY_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["cancel_query"])
+    @mcp.tool(
+        name="cancel_query",
+        description=CANCEL_QUERY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["cancel_query"],
+    )
     async def cancel_query(
         clientContextID: Annotated[
             str, Field(description="clientContextID from submit_async_query.")
@@ -570,8 +618,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
 
     # Introspection tools
 
-    @mcp.tool(name="validate_syntax", description=VALIDATE_SYNTAX_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["validate_syntax"])
+    @mcp.tool(
+        name="validate_syntax",
+        description=VALIDATE_SYNTAX_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["validate_syntax"],
+    )
     async def validate_syntax(
         statement: Annotated[str, Field(description="SQL++ statement to compile-check.")],
         dataverse: Annotated[
@@ -583,8 +634,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="explain_query", description=EXPLAIN_QUERY_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["explain_query"])
+    @mcp.tool(
+        name="explain_query",
+        description=EXPLAIN_QUERY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["explain_query"],
+    )
     async def explain_query(
         statement: Annotated[str, Field(description="SQL++ statement to explain.")],
         dataverse: Annotated[
@@ -598,8 +652,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
 
     # Discovery & diagnostics tools
 
-    @mcp.tool(name="check_index_usage", description=CHECK_INDEX_USAGE_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["check_index_usage"])
+    @mcp.tool(
+        name="check_index_usage",
+        description=CHECK_INDEX_USAGE_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["check_index_usage"],
+    )
     async def check_index_usage(
         statement: Annotated[str, Field(description="SQL++ SELECT to analyze.")],
         dataverse: Annotated[
@@ -611,8 +668,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="list_functions", description=LIST_FUNCTIONS_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["list_functions"])
+    @mcp.tool(
+        name="list_functions",
+        description=LIST_FUNCTIONS_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["list_functions"],
+    )
     async def list_functions(
         language: Annotated[
             Literal["INTERNAL", "SQL++", "JAVA", "PYTHON"] | None,
@@ -640,8 +700,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         )
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="get_function", description=GET_FUNCTION_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["get_function"])
+    @mcp.tool(
+        name="get_function",
+        description=GET_FUNCTION_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_function"],
+    )
     async def get_function(
         name: Annotated[str, Field(description="Function name (built-in or UDF).")],
         dataverse: Annotated[
@@ -651,8 +714,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         result = await run_get_function(_client(), settings, name=name, dataverse=dataverse)
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="search_metadata", description=SEARCH_METADATA_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["search_metadata"])
+    @mcp.tool(
+        name="search_metadata",
+        description=SEARCH_METADATA_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["search_metadata"],
+    )
     async def search_metadata(
         query: Annotated[str, Field(description="Name to fuzzy-search the catalog for.")],
         limit: Annotated[int, Field(ge=1, le=100, description="Max matches.")] = 20,
@@ -660,22 +726,31 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         result = await run_search_metadata(_client(), settings, query=query, limit=limit)
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="get_cluster_status", description=GET_CLUSTER_STATUS_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["get_cluster_status"])
+    @mcp.tool(
+        name="get_cluster_status",
+        description=GET_CLUSTER_STATUS_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_cluster_status"],
+    )
     async def get_cluster_status() -> types.CallToolResult:
         result = await run_get_cluster_status(_client())
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="get_node_details", description=GET_NODE_DETAILS_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["get_node_details"])
+    @mcp.tool(
+        name="get_node_details",
+        description=GET_NODE_DETAILS_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_node_details"],
+    )
     async def get_node_details(
         node: Annotated[str, Field(description="Node-controller id from cluster status.")],
     ) -> types.CallToolResult:
         result = await run_get_node_details(_client(), settings, node=node)
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="get_reference", description=GET_REFERENCE_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["get_reference"])
+    @mcp.tool(
+        name="get_reference",
+        description=GET_REFERENCE_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_reference"],
+    )
     async def get_reference(
         topic: Annotated[
             Literal[
@@ -692,8 +767,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     ) -> types.CallToolResult:
         return _to_call_tool_result(run_get_reference(topic))
 
-    @mcp.tool(name="database_health_check", description=DATABASE_HEALTH_CHECK_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["database_health_check"])
+    @mcp.tool(
+        name="database_health_check",
+        description=DATABASE_HEALTH_CHECK_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["database_health_check"],
+    )
     async def database_health_check(
         dataverse: Annotated[
             str | None, Field(description="Optional dataverse to scope the scan to.")
@@ -702,8 +780,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         result = await run_database_health_check(_client(), settings, dataverse=dataverse)
         return _to_call_tool_result(result)
 
-    @mcp.tool(name="get_query_history", description=GET_QUERY_HISTORY_DESCRIPTION,
-        annotations=TOOL_ANNOTATIONS["get_query_history"])
+    @mcp.tool(
+        name="get_query_history",
+        description=GET_QUERY_HISTORY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_query_history"],
+    )
     async def get_query_history(
         limit: Annotated[int, Field(ge=1, le=100, description="Max entries to return.")] = 20,
         failuresOnly: Annotated[
@@ -735,9 +816,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
 
     @mcp.resource("asterixdb://dataverses", name="Dataverses", mime_type="application/json")
     async def dataverses_resource() -> str:
-        return json.dumps(
-            await read_dataverses(_client(), settings.agent_session_id), default=str
-        )
+        return json.dumps(await read_dataverses(_client(), settings.agent_session_id), default=str)
 
     @mcp.resource(
         "asterixdb://cluster/diagnostics",
@@ -756,9 +835,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         mime_type="application/json",
     )
     async def dataset_schema_template(dataverse: str, dataset: str) -> str:
-        return await read_dataset_schema(
-            _client(), settings, dataverse=dataverse, dataset=dataset
-        )
+        return await read_dataset_schema(_client(), settings, dataverse=dataverse, dataset=dataset)
 
     @mcp.resource(
         "asterixdb://dataverse/{dataverse}",
@@ -774,9 +851,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         mime_type="application/json",
     )
     async def dataset_sample_template(dataverse: str, dataset: str) -> str:
-        return await read_dataset_sample(
-            _client(), settings, dataverse=dataverse, dataset=dataset
-        )
+        return await read_dataset_sample(_client(), settings, dataverse=dataverse, dataset=dataset)
 
     @mcp.resource(
         "asterixdb://datasets/{dataverse}",
@@ -865,18 +940,14 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         name="recommend_indexes",
         description="Chain check_index_usage into an index recommendation.",
     )
-    async def recommend_indexes(
-        dataverse: str | None = None, dataset: str | None = None
-    ) -> str:
+    async def recommend_indexes(dataverse: str | None = None, dataset: str | None = None) -> str:
         return compose_recommend_indexes(dataverse, dataset)
 
     @mcp.prompt(
         name="explore_nested_data",
         description="Guide UNNEST / OBJECT_NAMES traversal of nested documents.",
     )
-    async def explore_nested_data(
-        dataverse: str | None = None, dataset: str | None = None
-    ) -> str:
+    async def explore_nested_data(dataverse: str | None = None, dataset: str | None = None) -> str:
         return compose_explore_nested_data(dataverse, dataset)
 
     @mcp.prompt(
@@ -914,7 +985,24 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
 
 
 def main() -> None:
-    """Console-script entry point: build the server and serve over stdio."""
+    """Console-script entry point: build the server and serve on the configured transport.
+
+    stdio (the default) runs the local sidecar. http serves the Streamable HTTP
+    transport — with a /health probe and optional bearer auth — via uvicorn.
+    """
     settings = load_settings()
     server = build_server(settings)
+    if settings.transport == "http":
+        _serve_http(server, settings)
+        return
     server.run()
+
+
+def _serve_http(server: FastMCP, settings: Settings) -> None:
+    """Serve the Streamable HTTP app over uvicorn (imported lazily for stdio runs)."""
+    import uvicorn
+
+    from .http_app import build_http_app
+
+    app = build_http_app(server, settings)
+    uvicorn.run(app, host=settings.http_host, port=settings.http_port)

@@ -14,9 +14,9 @@ gateway hardcodes it on every query. This keeps the database control plane
 stateless with respect to LLM sessions.
 
 ```
-LLM client  ──MCP (stdio)──▶  AsterixDB MCP Gateway  ──HTTP──▶  AsterixDB CC
-                                (this repo)                     /query/service
-                                                                /admin/*
+LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP──▶  AsterixDB CC
+                                       (this repo)                    /query/service
+                                                                      /admin/*
 ```
 
 ## Capabilities
@@ -141,10 +141,66 @@ All settings come from environment variables (prefix `ASTERIXDB_MCP_`):
 | `ASTERIXDB_MCP_MAX_BYTES_PER_QUERY` | `10485760` | Egress layer 2: max response bytes buffered. |
 | `ASTERIXDB_MCP_REQUEST_TIMEOUT_S` | `35.0` | httpx transport timeout for the CC hop. |
 
+### HTTP transport (optional)
+
+The gateway speaks **stdio** by default (a local sidecar). Set `transport=http` to
+expose the MCP **Streamable HTTP** endpoint for remote / multi-client / web access.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ASTERIXDB_MCP_TRANSPORT` | `stdio` | `stdio` or `http`. |
+| `ASTERIXDB_MCP_HTTP_HOST` | `127.0.0.1` | Bind host. Keep loopback unless behind a proxy. |
+| `ASTERIXDB_MCP_HTTP_PORT` | `19200` | Bind port (AsterixDB `19xxx` family, clear of the cluster's own ports). |
+| `ASTERIXDB_MCP_HTTP_PATH` | `/mcp` | Streamable HTTP endpoint path. |
+| `ASTERIXDB_MCP_AUTH_MODE` | `none` | `none` (loopback only), `bearer`, or `oauth`. |
+| `ASTERIXDB_MCP_API_KEY` | _(unset)_ | Bearer token for `auth_mode=bearer` (≥ 16 chars). |
+| `ASTERIXDB_MCP_OAUTH_ISSUER` | _(unset)_ | Authorization-server issuer URL (`auth_mode=oauth`). |
+| `ASTERIXDB_MCP_OAUTH_AUDIENCE` | _(unset)_ | This server's audience (token `aud`, RFC 8707). |
+| `ASTERIXDB_MCP_OAUTH_JWKS_URI` | _(unset)_ | AS JWKS endpoint for token-signature verification. |
+| `ASTERIXDB_MCP_OAUTH_REQUIRED_SCOPES` | `[]` | Scopes a token must carry (JSON list). |
+| `ASTERIXDB_MCP_OAUTH_ALGORITHMS` | `["RS256"]` | Accepted JWT signing algorithms (JSON list). |
+| `ASTERIXDB_MCP_HTTP_ALLOWED_HOSTS` | `[]` | Extra `Host` values to allow (proxy host; include `:port` when non-default). |
+| `ASTERIXDB_MCP_HTTP_ALLOWED_ORIGINS` | `[]` | Extra `Origin` values to allow (browser origin, scheme + host[:port]). |
+
+A `GET /health` liveness probe is served unauthenticated and returns
+`{"status":"ok"}` (no cluster call, no version disclosure).
+
+#### Security model
+
+The HTTP listener is built to a defensive baseline:
+
+- **DNS-rebinding protection** is always on for HTTP: only the gateway's own
+  `host:port` (plus loopback and any configured extras) is accepted in the `Host`
+  and `Origin` headers, so a browser page cannot drive a localhost gateway.
+- **Auth is required off loopback.** `auth_mode=none` is refused on a non-loopback
+  bind — the server fails fast rather than exposing the database.
+- **`bearer`** is a shared static token (constant-time compared); minimum 16 chars.
+- **`oauth`** makes the gateway an **OAuth 2.1 resource server**: it verifies bearer
+  JWTs against your authorization server's JWKS and checks issuer, audience, expiry,
+  and required scopes. It never issues tokens — bring an external AS (Auth0,
+  Keycloak, WorkOS, Okta, …). Clients discover the AS via
+  `/.well-known/oauth-protected-resource`.
+- **Terminate TLS at a reverse proxy.** The server speaks plaintext HTTP; never
+  send a bearer token over an unencrypted public hop. Bind loopback and front it
+  with a TLS-terminating proxy for any non-local deployment.
+- The read-only guarantee is unaffected: `readonly=true` is still forced on every
+  CC query regardless of transport or auth.
+
+> Bearer is a pragmatic tier for a gateway behind a trusted proxy; `oauth` is the
+> spec-aligned model with rotation, audience binding, and per-client identity.
+
 ## Run
 
 ```bash
-asterixdb-mcp-server        # serves MCP over stdio
+asterixdb-mcp-server        # serves MCP over stdio (default)
+
+# Streamable HTTP on 127.0.0.1:19200 with OAuth 2.1 resource-server auth:
+ASTERIXDB_MCP_TRANSPORT=http \
+ASTERIXDB_MCP_AUTH_MODE=oauth \
+ASTERIXDB_MCP_OAUTH_ISSUER=https://your-as.example.com \
+ASTERIXDB_MCP_OAUTH_AUDIENCE=https://mcp.example.com/mcp \
+ASTERIXDB_MCP_OAUTH_JWKS_URI=https://your-as.example.com/.well-known/jwks.json \
+  asterixdb-mcp-server
 ```
 
 ### Connect Claude Desktop
@@ -194,7 +250,10 @@ src/asterixdb_mcp/
   permits.py         # non-blocking concurrency permit pools
   statement_guard.py # pre-flight read-only statement guard
   plan_guard.py      # plan-layer mutation backstop
-  server.py          # FastMCP binding (19 tools, 11 resources, 4 templates, 6 prompts)
+  server.py          # FastMCP binding + transport selection (stdio | http)
+  http_app.py        # Streamable HTTP ASGI app, /health probe, bearer middleware
+  http_security.py   # DNS-rebinding allowlist, startup checks, oauth wiring
+  auth.py            # OAuth 2.1 resource-server JWT verification (JWKS)
   tools/             # one module per tool (SDK-agnostic cores)
   resources/         # live cluster resources + SQL++ reference docs
   prompts/           # guided multi-step workflows

@@ -7,6 +7,8 @@ no config file on disk. Defaults target a local single-node AsterixDB cluster.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,6 +32,24 @@ DEFAULT_AUDIT_LOG_TTL_S = 900.0  # how long a submission stays in the audit log
 DEFAULT_MAX_ROWS_TO_LLM = 200  # rows delivered before truncation metadata kicks in
 DEFAULT_MAX_BYTES_TO_LLM = 256 * 1024  # serialized result bytes delivered to the LLM
 DEFAULT_MAX_FIELD_CHARS = 500  # per-string-value clamp so one huge field can't dominate
+
+# Transport. stdio is the default (a local sidecar spoken to over stdin/stdout);
+# http exposes the Streamable HTTP transport for remote / multi-client access.
+DEFAULT_TRANSPORT: Literal["stdio", "http"] = "stdio"
+# Default HTTP port 19200: same 19xxx family as the AsterixDB Cluster Controller
+# (19002) but clear of the range the cluster itself binds (19001-19098), so the
+# gateway does not collide with a co-located AsterixDB or with common dev servers
+# on 8000/8080. Loopback host by default; bind 0.0.0.0 only behind a reverse proxy.
+DEFAULT_HTTP_HOST = "127.0.0.1"
+DEFAULT_HTTP_PORT = 19200
+DEFAULT_HTTP_PATH = "/mcp"  # Streamable HTTP endpoint path
+HEALTH_PATH = "/health"  # unauthenticated liveness probe path
+
+# Authentication. none = open (allowed on loopback only); bearer = shared static
+# token; oauth = OAuth 2.1 resource-server JWT validation against an external AS.
+DEFAULT_AUTH_MODE: Literal["none", "bearer", "oauth"] = "none"
+MIN_API_KEY_LENGTH = 16  # reject trivially-guessable bearer tokens at startup
+DEFAULT_OAUTH_ALGORITHMS = ["RS256"]  # asymmetric default; 'none' always rejected, HS* opt-in only
 
 
 class Settings(BaseSettings):
@@ -128,6 +148,76 @@ class Settings(BaseSettings):
         default=DEFAULT_MAX_FIELD_CHARS,
         ge=1,
         description="Max characters of any single string field value before it is clamped.",
+    )
+
+    # Transport selection and HTTP server binding
+    transport: Literal["stdio", "http"] = Field(
+        default=DEFAULT_TRANSPORT,
+        description="Transport to serve on: 'stdio' (local sidecar) or 'http' "
+        "(Streamable HTTP for remote/multi-client access).",
+    )
+    http_host: str = Field(
+        default=DEFAULT_HTTP_HOST,
+        description="Host interface to bind when transport='http'. Defaults to loopback; "
+        "set 0.0.0.0 only behind a trusted reverse proxy.",
+    )
+    http_port: int = Field(
+        default=DEFAULT_HTTP_PORT,
+        ge=1,
+        le=65535,
+        description="TCP port to bind when transport='http'.",
+    )
+    http_path: str = Field(
+        default=DEFAULT_HTTP_PATH,
+        description="URL path of the Streamable HTTP MCP endpoint.",
+    )
+    # DNS-rebinding protection: the gateway's own host:port plus loopback are
+    # always allowed; these extend the allowlist for a proxied public deployment
+    # (e.g. the proxy's Host and the browser Origin it forwards).
+    http_allowed_hosts: list[str] = Field(
+        default_factory=list,
+        description="Extra Host header values to allow (e.g. a reverse-proxy host).",
+    )
+    http_allowed_origins: list[str] = Field(
+        default_factory=list,
+        description="Extra Origin header values to allow (e.g. https://app.example.com).",
+    )
+
+    # Authentication boundary for the HTTP transport
+    auth_mode: Literal["none", "bearer", "oauth"] = Field(
+        default=DEFAULT_AUTH_MODE,
+        description="HTTP auth: 'none' (loopback-only), 'bearer' (static token), or "
+        "'oauth' (OAuth 2.1 resource-server JWT validation).",
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="Bearer token required on every HTTP request except the health probe "
+        "when auth_mode='bearer'. Must be at least "
+        f"{MIN_API_KEY_LENGTH} characters.",
+    )
+
+    # OAuth 2.1 resource-server settings (auth_mode='oauth'). The gateway verifies
+    # tokens issued by an external authorization server; it never issues them.
+    oauth_issuer: str = Field(
+        default="",
+        description="Issuer URL of the authorization server (the JWT `iss` claim).",
+    )
+    oauth_audience: str = Field(
+        default="",
+        description="This resource server's audience: the gateway's canonical URL, "
+        "matched against the JWT `aud` claim (RFC 8707).",
+    )
+    oauth_jwks_uri: str = Field(
+        default="",
+        description="JWKS endpoint of the authorization server, used to verify token signatures.",
+    )
+    oauth_required_scopes: list[str] = Field(
+        default_factory=list,
+        description="Scopes a token must carry to access the gateway (all required).",
+    )
+    oauth_algorithms: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_OAUTH_ALGORITHMS),
+        description="Accepted JWT signing algorithms. Defaults to RS256.",
     )
 
 
