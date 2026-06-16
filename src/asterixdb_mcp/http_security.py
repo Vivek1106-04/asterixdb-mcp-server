@@ -102,6 +102,13 @@ def _validate_oauth(settings: Settings) -> None:
     missing = [name for name, value in fields if not value]
     if missing:
         raise ValueError("auth_mode='oauth' requires these settings: " + ", ".join(missing))
+    # An empty algorithm list makes every jwt.decode fail (and the verifier swallows
+    # the error into a silent 401); 'none' disables signature verification entirely,
+    # the classic JWT bypass. Reject both at startup with an actionable error.
+    if not settings.oauth_algorithms:
+        raise ValueError("ASTERIXDB_MCP_OAUTH_ALGORITHMS must contain at least one algorithm.")
+    if any(str(algorithm).lower() == "none" for algorithm in settings.oauth_algorithms):
+        raise ValueError("ASTERIXDB_MCP_OAUTH_ALGORITHMS must not include the 'none' algorithm.")
     # Fail fast on a malformed URL with a config-focused error rather than a later,
     # less actionable failure inside PyJWKClient / JWT verification.
     for name, value in fields:

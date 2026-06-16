@@ -106,6 +106,27 @@ def test_validate_oauth_rejects_malformed_url() -> None:
         )
 
 
+def _oauth_settings(**overrides: object) -> Settings:
+    base: dict[str, object] = {
+        "auth_mode": "oauth",
+        "oauth_issuer": "https://as.example.com",
+        "oauth_audience": "https://mcp.example.com/mcp",
+        "oauth_jwks_uri": "https://as.example.com/jwks",
+    }
+    base.update(overrides)
+    return Settings(**base)
+
+
+def test_validate_oauth_rejects_empty_algorithms() -> None:
+    with pytest.raises(ValueError, match="at least one algorithm"):
+        validate_http_security(_oauth_settings(oauth_algorithms=[]))
+
+
+def test_validate_oauth_rejects_none_algorithm() -> None:
+    with pytest.raises(ValueError, match="must not include the 'none'"):
+        validate_http_security(_oauth_settings(oauth_algorithms=["RS256", "none"]))
+
+
 def test_build_auth_none_for_non_oauth() -> None:
     auth, verifier = build_auth(Settings(auth_mode="bearer", api_key="x" * 16))
     assert auth is None
