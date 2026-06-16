@@ -49,7 +49,7 @@ HEALTH_PATH = "/health"  # unauthenticated liveness probe path
 # token; oauth = OAuth 2.1 resource-server JWT validation against an external AS.
 DEFAULT_AUTH_MODE: Literal["none", "bearer", "oauth"] = "none"
 MIN_API_KEY_LENGTH = 16  # reject trivially-guessable bearer tokens at startup
-DEFAULT_OAUTH_ALGORITHMS = ["RS256"]  # asymmetric signing; HS* shared-secret is rejected by default
+DEFAULT_OAUTH_ALGORITHMS = ["RS256"]  # asymmetric default; 'none' always rejected, HS* opt-in only
 
 
 class Settings(BaseSettings):
