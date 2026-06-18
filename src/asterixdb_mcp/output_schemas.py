@@ -315,6 +315,20 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         required=("queries", "count"),
         description="Recent session queries with outcome and classified error, newest first.",
     ),
+    "recommend_indexes": _obj(
+        {
+            "status": _STRING,
+            "dataverseFilter": {"type": ["string", "null"]},
+            "statementsSubmitted": _INT,
+            "statementsAnalyzed": _INT,
+            "indexesKnown": _INT,
+            "recommendationCount": _INT,
+            "recommendations": _array_of_objects(),
+            "skipped": _array_of_objects(),
+        },
+        required=("recommendations", "recommendationCount"),
+        description="Ranked CREATE INDEX recommendations scored from a workload's plan predicates.",
+    ),
 }
 
 

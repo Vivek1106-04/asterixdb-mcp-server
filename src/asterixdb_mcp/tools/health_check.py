@@ -35,6 +35,7 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import GatewayError
+from ..index_catalog import normalize_search_key
 from ..inventory import fetch_dataset_rows
 from . import ToolResult
 from .get_schema import extract_dataset_format_info
@@ -225,7 +226,7 @@ def _group_secondary_indexes(
     for idx in indexes:
         if idx.get("IsPrimary"):
             continue
-        keys = _normalize_keys(idx.get("SearchKey"))
+        keys = normalize_search_key(idx.get("SearchKey"))
         if not keys:
             continue
         key = (idx.get("DataverseName"), idx.get("DatasetName"))
@@ -237,23 +238,6 @@ def _group_secondary_indexes(
             }
         )
     return grouped
-
-
-def _normalize_keys(search_key: Any) -> list[str]:
-    """Render an index SearchKey to a list of dotted field paths for comparison.
-
-    Each key entry is itself a list of path segments (e.g. [["address","city"]]
-    -> "address.city"); a bare string is taken verbatim.
-    """
-    if not isinstance(search_key, list):
-        return []
-    out: list[str] = []
-    for entry in search_key:
-        if isinstance(entry, list):
-            out.append(".".join(str(seg) for seg in entry))
-        else:
-            out.append(str(entry))
-    return out
 
 
 def _scope(rows: list[dict[str, Any]], dataverse: str | None) -> list[dict[str, Any]]:
