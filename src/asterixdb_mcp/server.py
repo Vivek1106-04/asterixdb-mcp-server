@@ -50,9 +50,11 @@ from .resources.reference import (
     read_type_system,
 )
 from .resources.templates import (
+    read_dataset_indexes,
     read_dataset_sample,
     read_dataset_schema,
     read_dataverse_datasets,
+    read_dataverse_indexes,
     read_dataverse_schema,
 )
 from .resources.version import read_version
@@ -894,6 +896,24 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     )
     async def dataverse_datasets_template(dataverse: str) -> str:
         return await read_dataverse_datasets(_client(), settings, dataverse=dataverse)
+
+    @mcp.resource(
+        "asterixdb://indexes/{dataverse}/{dataset}",
+        name="Dataset Indexes",
+        mime_type="application/json",
+    )
+    async def dataset_indexes_template(dataverse: str, dataset: str) -> str:
+        return await read_dataset_indexes(
+            _client(), settings, dataverse=dataverse, dataset=dataset
+        )
+
+    @mcp.resource(
+        "asterixdb://indexes/{dataverse}",
+        name="Dataverse Indexes",
+        mime_type="application/json",
+    )
+    async def dataverse_indexes_template(dataverse: str) -> str:
+        return await read_dataverse_indexes(_client(), settings, dataverse=dataverse)
 
     # Static reference resources (no runtime fetch)
 

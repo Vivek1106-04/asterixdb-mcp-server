@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**22 tools, 11 resources, 4 resource templates, 6 prompts.** Tools perform
+**22 tools, 11 resources, 6 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -53,7 +53,7 @@ a failed call to be rejected.
 | Analyze | `validate_syntax` | Compile-only syntax check, no execution. |
 | Analyze | `explain_query` | Optimizer plan for a statement. |
 | Analyze | `check_index_usage` | Whether a query's predicates hit an index. |
-| Analyze | `recommend_indexes` | Ranked `CREATE INDEX` suggestions scored from a query workload. |
+| Analyze | `recommend_indexes` | CREATE INDEX advice from a workload via the cluster's native `ADVISE` advisor. |
 | Discover | `list_dataverses` | Enumerate dataverses on the cluster. |
 | Discover | `list_datasets` | Paginated dataset discovery, optionally scoped to a dataverse. |
 | Discover | `describe_dataverse` | Datasets, types, indexes, and functions in one dataverse. |
@@ -97,6 +97,8 @@ autocomplete through `completion/complete`.
 | `asterixdb://dataverse/{dataverse}` | Full schema of every dataset in a dataverse. |
 | `asterixdb://sample/{dataverse}/{dataset}` | A small bounded sample of real documents. |
 | `asterixdb://datasets/{dataverse}` | Dataset summaries within one dataverse. |
+| `asterixdb://indexes/{dataverse}/{dataset}` | Detailed secondary indexes on one dataset. |
+| `asterixdb://indexes/{dataverse}` | Detailed secondary index inventory for a dataverse. |
 
 ### Prompts
 
