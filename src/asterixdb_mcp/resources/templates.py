@@ -22,6 +22,8 @@ import json
 
 from ..cc_client import CCClient
 from ..config import Settings
+from ..context_id import make_client_context_id
+from ..index_catalog import fetch_indexes_detailed
 from ..tools.describe_dataverse import run_describe_dataverse
 from ..tools.get_schema import run_get_schema
 from ..tools.list_datasets import run_list_datasets
@@ -60,3 +62,32 @@ async def read_dataverse_datasets(client: CCClient, settings: Settings, *, datav
     """asterixdb://datasets/{dataverse} — dataset summaries within one dataverse."""
     result = await run_list_datasets(client, settings, dataverse=dataverse)
     return json.dumps(result.structured, default=str)
+
+
+async def read_dataset_indexes(
+    client: CCClient, settings: Settings, *, dataverse: str, dataset: str
+) -> str:
+    """asterixdb://indexes/{dataverse}/{dataset} — detailed secondary indexes on one dataset."""
+    ccid = make_client_context_id(settings.agent_session_id, "indexes_resource")
+    indexes = await fetch_indexes_detailed(client, ccid, dataverse=dataverse, dataset=dataset)
+    envelope = {
+        "status": "success",
+        "dataverse": dataverse,
+        "dataset": dataset,
+        "indexCount": len(indexes),
+        "indexes": [index.to_dict() for index in indexes],
+    }
+    return json.dumps(envelope, default=str)
+
+
+async def read_dataverse_indexes(client: CCClient, settings: Settings, *, dataverse: str) -> str:
+    """asterixdb://indexes/{dataverse} — detailed secondary index inventory for a dataverse."""
+    ccid = make_client_context_id(settings.agent_session_id, "indexes_resource")
+    indexes = await fetch_indexes_detailed(client, ccid, dataverse=dataverse)
+    envelope = {
+        "status": "success",
+        "dataverse": dataverse,
+        "indexCount": len(indexes),
+        "indexes": [index.to_dict() for index in indexes],
+    }
+    return json.dumps(envelope, default=str)

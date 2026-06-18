@@ -10,9 +10,11 @@ import pytest
 from asterixdb_mcp.cc_client import CCClient
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.resources.templates import (
+    read_dataset_indexes,
     read_dataset_sample,
     read_dataset_schema,
     read_dataverse_datasets,
+    read_dataverse_indexes,
     read_dataverse_schema,
 )
 
@@ -90,3 +92,43 @@ async def test_dataverse_schema_reader_emits_valid_json_on_error_envelope() -> N
     out = await read_dataverse_schema(_client(_err()), _settings(), dataverse="Sales")
     parsed = json.loads(out)
     assert "errorType" in parsed
+
+
+async def test_dataset_indexes_reader_projects_full_detail() -> None:
+    rows = [
+        {
+            "IndexName": "ordersByCity",
+            "DataverseName": "Sales",
+            "DatasetName": "Orders",
+            "IndexStructure": "BTREE",
+            "IsPrimary": False,
+            "IsEnforced": True,
+            "SearchKey": [["address", "city"]],
+            "SearchKeyType": ["string"],
+            "SearchKeySourceIndicator": [0],
+            "GramLength": 3,
+        }
+    ]
+    out = await read_dataset_indexes(
+        _client(_ok(rows)), _settings(), dataverse="Sales", dataset="Orders"
+    )
+    parsed = json.loads(out)
+    assert parsed["status"] == "success"
+    assert parsed["dataset"] == "Orders"
+    assert parsed["indexCount"] == 1
+    index = parsed["indexes"][0]
+    assert index["name"] == "ordersByCity"
+    assert index["keyFields"] == ["address.city"]
+    assert index["keyFieldTypes"] == ["string"]
+    assert index["searchKeySourceIndicator"] == [0]
+    assert index["gramLength"] == 3
+    assert index["isEnforced"] is True
+
+
+async def test_dataverse_indexes_reader_returns_empty_catalog_on_error() -> None:
+    out = await read_dataverse_indexes(_client(_err()), _settings(), dataverse="Sales")
+    parsed = json.loads(out)
+    # A transport failure degrades to an empty catalog document, never a crash.
+    assert parsed["status"] == "success"
+    assert parsed["indexCount"] == 0
+    assert parsed["indexes"] == []

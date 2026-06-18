@@ -168,6 +168,8 @@ async def test_advertises_resource_templates(server) -> None:
         "asterixdb://dataverse/{dataverse}",
         "asterixdb://sample/{dataverse}/{dataset}",
         "asterixdb://datasets/{dataverse}",
+        "asterixdb://indexes/{dataverse}/{dataset}",
+        "asterixdb://indexes/{dataverse}",
     }
 
 
@@ -202,7 +204,7 @@ async def test_resource_template_completion_resolves_dataset_argument() -> None:
 
 
 async def test_each_resource_template_reads_through_the_server() -> None:
-    # Drives the four template closures in server.py end to end.
+    # Drives every template closure in server.py end to end.
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -223,6 +225,8 @@ async def test_each_resource_template_reads_through_the_server() -> None:
         "asterixdb://dataverse/Sales",
         "asterixdb://sample/Sales/Orders",
         "asterixdb://datasets/Sales",
+        "asterixdb://indexes/Sales/Orders",
+        "asterixdb://indexes/Sales",
     ):
         contents = await server.read_resource(uri)
         body = next(iter(contents)).content
