@@ -31,6 +31,12 @@ from typing import Any
 # ExecutionPlansJsonPrintUtil.OPTIMIZED_LOGICAL_PLAN_LBL.
 OPTIMIZED_PLAN_KEY = "optimizedLogicalPlan"
 
+# Envelope key for the *unoptimized* logical plan (requested with
+# logical-plan=true). The optimizer rewrites declared-field access to
+# field-access-by-INDEX — the field name is lost — so a tool that needs the
+# field NAME must read this plan, where access is still by name.
+UNOPTIMIZED_PLAN_KEY = "logicalPlan"
+
 _OPERATOR_FIELD = "operator"
 _OPERATOR_ID_FIELD = "operatorId"
 _PHYSICAL_OPERATOR_FIELD = "physical-operator"
@@ -85,15 +91,16 @@ class ParsedPlan:
         }
 
 
-def parse_optimized_plan(plans: Any) -> ParsedPlan | None:
-    """Parse the optimized logical plan out of a CC ``plans`` object.
+def parse_plan(plans: Any, key: str) -> ParsedPlan | None:
+    """Parse the operator tree stored under ``key`` in a CC ``plans`` object.
 
-    Returns None when no recognizable optimized plan tree is present (e.g. the
-    statement produced no plan, or the CC used a non-JSON plan format).
+    Returns None when no recognizable plan tree is present under that key (e.g.
+    the statement produced no plan, the key was not requested, or the CC used a
+    non-JSON plan format).
     """
     if not isinstance(plans, dict):
         return None
-    root_node = plans.get(OPTIMIZED_PLAN_KEY)
+    root_node = plans.get(key)
     if not isinstance(root_node, dict):
         return None
 
@@ -107,6 +114,11 @@ def parse_optimized_plan(plans: Any) -> ParsedPlan | None:
         data_sources=tuple(_dedupe_preserving_order(sources)),
         depth=_depth(root),
     )
+
+
+def parse_optimized_plan(plans: Any) -> ParsedPlan | None:
+    """Parse the optimized logical plan out of a CC ``plans`` object."""
+    return parse_plan(plans, OPTIMIZED_PLAN_KEY)
 
 
 def datasets_from_sources(

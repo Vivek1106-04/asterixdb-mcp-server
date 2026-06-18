@@ -543,6 +543,40 @@ async def test_query_history_records_and_returns_execute_query() -> None:
     assert entry["statement"] == "SELECT 1;"
 
 
+async def test_recommend_indexes_call_returns_ranked_ddl() -> None:
+    plan = {
+        "status": "success",
+        "plans": {
+            "optimizedLogicalPlan": {
+                "operator": "select",
+                "condition": {"expressions": ['eq(field-access-by-index($$d, 1), "x")']},
+                "inputs": [{"operator": "data-scan", "data-source": "S.Orders", "inputs": []}],
+            },
+            "logicalPlan": {
+                "operator": "select",
+                "condition": {
+                    "expressions": ["eq(field-access-by-name($$d, AString: {city}), AString: {x})"]
+                },
+                "inputs": [{"operator": "data-scan", "data-source": "S.Orders", "inputs": []}],
+            },
+        },
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        statement = parse_qs(req.content.decode()).get("statement", [""])[0]
+        if "Metadata.`Index`" in statement:
+            return httpx.Response(200, json={"status": "success", "results": []})
+        return httpx.Response(200, json=plan)
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool(
+        "recommend_indexes", {"statements": ["SELECT * FROM S.Orders WHERE city='x' LIMIT 5;"]}
+    )
+    assert result.isError is False
+    recs = result.structuredContent["recommendations"]
+    assert recs[0]["recommendedDDL"] == "CREATE INDEX idx_Orders_city ON S.Orders(city);"
+
+
 def test_main_builds_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     from mcp.server.fastmcp import FastMCP
 

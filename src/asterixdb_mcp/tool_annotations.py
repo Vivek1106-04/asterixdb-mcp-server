@@ -48,6 +48,7 @@ _LIVE_READ_ONLY = {
     "get_cluster_status": "Get Cluster Status",
     "get_node_details": "Get Node Details",
     "database_health_check": "Database Health Check",
+    "recommend_indexes": "Recommend Indexes",
 }
 
 

@@ -127,6 +127,7 @@ class CCClient:
         client_context_id: str,
         dataverse: str | None = None,
         emit_plan: bool = False,
+        emit_unoptimized_plan: bool = False,
         signature: bool = False,
         statement_parameters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -138,7 +139,11 @@ class CCClient:
         failures still raise.
 
         When ``emit_plan`` is set, the optimized logical plan is requested as a
-        JSON operator tree (``plans.optimizedLogicalPlan``).
+        JSON operator tree (``plans.optimizedLogicalPlan``). When
+        ``emit_unoptimized_plan`` is also set, the unoptimized logical plan
+        (``plans.logicalPlan``) is requested too — it retains field-access-BY-NAME
+        that the optimizer rewrites to by-index, so a caller that needs filter
+        field names reads it.
         """
         form = self._build_query_form(
             statement,
@@ -151,6 +156,7 @@ class CCClient:
             statement_parameters=statement_parameters,
             compile_only=True,
             emit_plan=emit_plan,
+            emit_unoptimized_plan=emit_unoptimized_plan,
         )
         return await self._post_query(form)
 
@@ -216,6 +222,7 @@ class CCClient:
         mode: str | None = None,
         compile_only: bool = False,
         emit_plan: bool = False,
+        emit_unoptimized_plan: bool = False,
     ) -> dict[str, str]:
         """Assemble the /query/service form parameters.
 
@@ -241,6 +248,11 @@ class CCClient:
             form["compile-only"] = "true"
         if emit_plan:
             form["optimized-logical-plan"] = "true"
+            form["plan-format"] = PLAN_FORMAT_JSON
+        if emit_unoptimized_plan:
+            # The unoptimized plan keeps field-access-by-name; needed to recover
+            # filter field names the optimizer rewrites away.
+            form["logical-plan"] = "true"
             form["plan-format"] = PLAN_FORMAT_JSON
         if compiler_parameters:
             # Tuning knobs are validated against the allowlist in the tool layer

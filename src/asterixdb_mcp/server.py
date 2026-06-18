@@ -77,6 +77,7 @@ from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
 from .tools.query_history import record_query, run_get_query_history
+from .tools.recommend_indexes import run_recommend_indexes
 from .tools.sample_dataset import run_sample_dataset
 from .tools.search_metadata import run_search_metadata
 
@@ -277,6 +278,19 @@ GET_QUERY_HISTORY_DESCRIPTION = (
     "see only the calls that failed, e.g. to recall the exact error before retrying. Reads "
     "in-gateway memory only (no cluster call); the history is session-scoped and expires with the "
     "audit-log TTL, so it shows recent activity rather than a full log."
+)
+
+RECOMMEND_INDEXES_DESCRIPTION = (
+    "Recommend secondary indexes for a WORKLOAD of representative SQL++ SELECTs. Compile-only and "
+    "read-only: it compiles each statement to its optimized plan, finds datasets that are full-"
+    "scanned and filter fields with no covering index, and returns recommendations ranked by how "
+    "often a field is filtered across the workload and whether those queries fall back to a full "
+    "scan. AsterixDB has no hypothetical-index facility, so recommendations are scored off plan "
+    "predicates, not a simulated re-cost. Each recommendation carries a `recommendedDDL` "
+    "(CREATE INDEX ...) and a `confidence`; the gateway is READ-ONLY and will NOT run the DDL — "
+    "it is advice for you or an operator to apply. A statement that does not compile is reported "
+    "in `skipped` rather than failing the batch. Pass complete SELECTs; qualify names or set "
+    "`dataverse`. For a single slow query, prefer check_index_usage."
 )
 
 
@@ -793,6 +807,25 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     ) -> types.CallToolResult:
         result = await run_get_query_history(
             audit, settings, limit=limit, failures_only=failuresOnly
+        )
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="recommend_indexes",
+        description=RECOMMEND_INDEXES_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["recommend_indexes"],
+    )
+    async def recommend_indexes_tool(
+        statements: Annotated[
+            list[str],
+            Field(description="Workload of complete SQL++ SELECT statements to analyze."),
+        ],
+        dataverse: Annotated[
+            str | None, Field(description="Default Dataverse for unqualified names.")
+        ] = None,
+    ) -> types.CallToolResult:
+        result = await run_recommend_indexes(
+            _client(), settings, statements=statements, dataverse=dataverse
         )
         return _to_call_tool_result(result)
 

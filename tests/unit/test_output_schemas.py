@@ -29,6 +29,7 @@ EXPECTED_TOOLS = {
     "get_reference",
     "database_health_check",
     "get_query_history",
+    "recommend_indexes",
 }
 
 
