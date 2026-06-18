@@ -318,16 +318,20 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
     "recommend_indexes": _obj(
         {
             "status": _STRING,
+            "method": _STRING,
             "dataverseFilter": {"type": ["string", "null"]},
             "statementsSubmitted": _INT,
             "statementsAnalyzed": _INT,
+            "nativeAdviseStatements": _INT,
             "indexesKnown": _INT,
+            "currentIndexes": {"type": "array"},
             "recommendationCount": _INT,
             "recommendations": _array_of_objects(),
             "skipped": _array_of_objects(),
         },
         required=("recommendations", "recommendationCount"),
-        description="Ranked CREATE INDEX recommendations scored from a workload's plan predicates.",
+        description="Ranked CREATE INDEX recommendations from AsterixDB's native ADVISE advisor "
+        "(heuristic plan-scan fallback).",
     ),
 }
 

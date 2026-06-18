@@ -1,42 +1,38 @@
-"""recommend_indexes: workload-driven secondary-index recommendations.
+"""recommend_indexes: secondary-index recommendations for a SQL++ workload.
 
-Given a workload of representative SQL++ SELECTs, compile each one (compile-only,
-read-only) to its optimized logical plan, observe which datasets are full-scanned
-and which filter fields have no covering secondary index, and return ranked
-``CREATE INDEX`` recommendations.
+Primary path is AsterixDB's **native** cost-based index advisor: the engine
+accepts ``ADVISE <query>``, drives the optimizer with hypothetical ("fake")
+indexes, and returns the indexes it would create. The gateway templates
+``ADVISE`` in front of each workload statement, forwards it read-only (the
+advisor analyzes, it does not execute the query), and aggregates the engine's
+``recommended_indexes`` across the workload. This is CBO-costed, join-aware, and
+is the cluster's own recommendation — strictly better than guessing from plan
+shape.
 
-AsterixDB has no hypothetical-index facility (no ``hypopg`` equivalent), so a
-recommendation cannot be validated by simulating the index and re-costing the
-plan. Instead it is scored off plan predicates and workload frequency: a field
-that is filtered on, has no covering index, and forces a full scan across several
-workload queries is the strongest candidate. The gateway is read-only — every
-recommendation is emitted as a DDL string for a human or agent to run, never
-executed here.
+A heuristic fallback covers clusters/builds where ``ADVISE`` is unavailable: it
+compiles the statement (compile-only, read-only), reads filter field names from
+the unoptimized logical plan (the optimizer rewrites declared-field access to
+by-index, losing the name), and scores fields that are filtered, uncovered by an
+existing index, and forcing a full scan. Fields are attributed only for
+single-dataset plans; a join yields a lower-confidence review entry.
 
-Field attribution is deliberately conservative. The optimizer rewrites
-declared-field access to by-INDEX (the field name is lost), so field names are
-read from the UNOPTIMIZED logical plan, where access is still by name; the
-optimized plan is used for the full-scan and existing-index signals. A candidate
-field is taken only from a ``field-access-by-name`` expression (so a value
-literal like ``"Austin"`` is never mistaken for a field), and only when the query
-touches a single dataset, because a multi-dataset (join) plan cannot reliably
-attribute a renamed plan variable back to one dataset. Queries that filter but
-yield no attributable field still surface as lower-confidence "review" entries
-carrying the raw predicates, so the agent can pick the field from the WHERE
-clause itself.
+The gateway is read-only either way: every recommendation is a ``CREATE INDEX``
+string for a human or agent to run, never executed here.
 
 Defense-in-Depth:
-- Layer 1: the schema states this is workload-only, compile-only, read-only, and
-  that the returned DDL is advice the gateway will not run.
-- Layer 2: each statement is guarded and compiled in isolation; one that does not
-  compile is recorded as ``skipped`` with its classified error rather than
-  failing the whole batch, and only field-access expressions yield candidate
-  fields so value literals can never become spurious index recommendations.
+- Layer 1: the schema states this is workload-only, read-only, and that the
+  returned DDL is advice the gateway will not run.
+- Layer 2: each statement is guarded and analyzed in isolation; one that the
+  advisor rejects falls back to the heuristic, and one that neither path can use
+  is recorded in ``skipped`` rather than failing the batch. Only field-access
+  expressions yield heuristic candidate fields, so value literals never become
+  spurious recommendations.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from ..cc_client import CCClient
@@ -54,9 +50,8 @@ from ..plan_parser import (
 from ..statement_guard import check_unsupported_functions, strip_set_prefix
 from . import ToolResult
 
-# Bound the batch so a caller cannot fan out an unbounded number of compile
-# round-trips, and bound the output so the ranking stays focused on the top
-# candidates rather than every field ever filtered.
+# Bound the batch so a caller cannot fan out an unbounded number of round-trips,
+# and bound the output so the ranking stays focused on the top candidates.
 MAX_STATEMENTS = 25
 MAX_RECOMMENDATIONS = 20
 
@@ -64,8 +59,11 @@ CONFIDENCE_HIGH = "high"
 CONFIDENCE_MEDIUM = "medium"
 CONFIDENCE_LOW = "low"
 
+SOURCE_ADVISE = "advise"
+SOURCE_HEURISTIC = "heuristic"
+
 # A full scan under a predicate is the signal that a field-level index would help;
-# weight those observations above non-scanning ones when ranking.
+# weight those observations above non-scanning ones when ranking (heuristic path).
 _FULL_SCAN_WEIGHT = 2
 _INDEXED_SCAN_WEIGHT = 1
 
@@ -73,12 +71,16 @@ _INDEXED_SCAN_WEIGHT = 1
 # name renders either as `AString: {fieldName}` (the expression printer's form,
 # seen in the unoptimized plan) or as a quoted `"fieldName"`. The name argument of
 # field-access-by-name is always a field name — a filter VALUE literal appears
-# elsewhere in the expression, never here — so this never mistakes a value for a
-# field. The optimizer rewrites this to field-access-by-INDEX (name lost), which
-# is why field names are read from the unoptimized plan.
+# elsewhere — so this never mistakes a value for a field.
 _FIELD_ACCESS_RE = re.compile(
     r"field-access-by-name\([^,()]+,\s*(?:AString:\s*\{([^}]+)\}|\"([^\"]+)\")\)"
 )
+
+# Parses the engine advisor's `CREATE INDEX <name> ON `db`.`dv`.`ds`(f1, f2)`
+# form (AdviseIndexRule.getCreateIndexClause) to recover dataverse/dataset/fields
+# for grouping and display. This parses the gateway-received engine string, never
+# user SQL++ — the architecture invariant (Gateway never parses SQL++) is intact.
+_ADVISE_DDL_RE = re.compile(r"ON\s+`[^`]+`\.`([^`]+)`\.`([^`]+)`\s*\(([^)]*)\)")
 
 
 async def run_recommend_indexes(
@@ -109,26 +111,47 @@ async def run_recommend_indexes(
     indexes = await fetch_secondary_indexes(client, ccid, dataverse=dataverse)
     covered = _covered_first_keys(indexes)
 
+    native: dict[str, dict[str, Any]] = {}
+    current_indexes: set[str] = set()
     observations: list[_Observation] = []
     analyzed = 0
+    native_used = 0
     skipped: list[dict[str, Any]] = []
+
     for statement in statements:
-        outcome = await _analyze_statement(
-            client, settings, statement, dataverse, user_tag
-        )
+        guard = _guard(statement)
+        if guard is not None:
+            skipped.append(guard)
+            continue
+        advice = await _advise_statement(client, settings, statement, dataverse, user_tag)
+        if advice is not None:
+            analyzed += 1
+            native_used += 1
+            current_indexes.update(advice.current)
+            for ddl in advice.recommended:
+                _accumulate_native(native, ddl)
+            continue
+        # Advisor unavailable for this statement: fall back to the heuristic plan path.
+        outcome = await _analyze_statement(client, settings, statement, dataverse, user_tag)
         if isinstance(outcome, dict):
             skipped.append(outcome)
             continue
         analyzed += 1
         observations.extend(outcome)
 
-    recommendations = _rank(_aggregate(observations, covered))
+    recommendations = _merge(native, _rank(_aggregate(observations, covered)))
+    method = SOURCE_ADVISE if native_used == analyzed and analyzed else (
+        SOURCE_HEURISTIC if native_used == 0 else "mixed"
+    )
     structured: dict[str, Any] = {
         "status": "success",
+        "method": method,
         "dataverseFilter": dataverse,
         "statementsSubmitted": len(statements),
         "statementsAnalyzed": analyzed,
+        "nativeAdviseStatements": native_used,
         "indexesKnown": len(indexes),
+        "currentIndexes": sorted(current_indexes),
         "recommendationCount": len(recommendations),
         "recommendations": recommendations,
         "skipped": skipped,
@@ -136,7 +159,122 @@ async def run_recommend_indexes(
     return ToolResult(text=_summarize(structured), structured=structured)
 
 
-# per-statement analysis (I/O)
+# native ADVISE path (I/O)
+
+
+@dataclass(frozen=True)
+class _Advice:
+    """The advisor's verdict for one statement: which indexes to create / exist."""
+
+    recommended: tuple[str, ...]
+    current: tuple[str, ...]
+
+
+async def _advise_statement(
+    client: CCClient,
+    settings: Settings,
+    statement: str,
+    dataverse: str | None,
+    user_tag: str | None,
+) -> _Advice | None:
+    """Run ``ADVISE <statement>`` and parse the advisor result.
+
+    Returns the parsed advice on success, or None when the advisor is unavailable
+    or returns nothing usable (transport error, the cluster does not support
+    ADVISE, or the statement is not a query) — the caller then falls back to the
+    heuristic path. The statement is already guarded by the caller.
+    """
+    cleaned = strip_set_prefix(statement)
+    ccid = make_client_context_id(settings.agent_session_id, user_tag)
+    try:
+        envelope = await client.execute(
+            f"ADVISE {cleaned}", client_context_id=ccid, dataverse=dataverse
+        )
+    except GatewayError:
+        # execute() raises on an error envelope (e.g. a cluster that does not
+        # support ADVISE rejects the keyword), so the heuristic fallback runs.
+        return None
+    return _parse_advise(envelope.get("results"))
+
+
+def _parse_advise(results: Any) -> _Advice | None:
+    """Extract recommended/current ``CREATE INDEX`` strings from an ADVISE result.
+
+    The advisor returns one ``Advise`` object whose ``advice.adviseinfo`` holds
+    ``recommended_indexes.indexes`` and ``current_indexes``, each entry an
+    ``{"index_statement": "CREATE INDEX ..."}`` record. Returns None when no such
+    object is present, signalling the fallback path.
+    """
+    if not isinstance(results, list):
+        return None
+    for row in results:
+        if not isinstance(row, dict):
+            continue
+        adviseinfo = row.get("advice", {}).get("adviseinfo") if isinstance(
+            row.get("advice"), dict
+        ) else None
+        if not isinstance(adviseinfo, dict):
+            continue
+        recommended = _index_statements(
+            adviseinfo.get("recommended_indexes", {}).get("indexes")
+            if isinstance(adviseinfo.get("recommended_indexes"), dict)
+            else None
+        )
+        current = _index_statements(adviseinfo.get("current_indexes"))
+        return _Advice(recommended=recommended, current=current)
+    return None
+
+
+def _index_statements(entries: Any) -> tuple[str, ...]:
+    """Pull the ``index_statement`` strings out of an advisor index list."""
+    if not isinstance(entries, list):
+        return ()
+    out: list[str] = []
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("index_statement"), str):
+            out.append(entry["index_statement"].strip())
+    return tuple(out)
+
+
+def _accumulate_native(native: dict[str, dict[str, Any]], ddl: str) -> None:
+    """Add one advisor DDL to the native recommendation set, counting support."""
+    record = native.get(ddl)
+    if record is None:
+        dv, ds, field = _parse_advise_ddl(ddl)
+        record = {
+            "source": SOURCE_ADVISE,
+            "confidence": CONFIDENCE_HIGH,
+            "dataverse": dv,
+            "dataset": ds,
+            "field": field,
+            "recommendedDDL": ddl if ddl.endswith(";") else f"{ddl};",
+            "supportingStatements": 0,
+        }
+        native[ddl] = record
+    record["supportingStatements"] += 1
+
+
+def _native_recommendations(native: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Finalize and rank the native advisor recommendations."""
+    out = list(native.values())
+    for record in out:
+        n = record["supportingStatements"]
+        record["rationale"] = (
+            f"AsterixDB's cost-based advisor (ADVISE) recommends this index for "
+            f"{n} workload statement(s)."
+        )
+    out.sort(key=lambda r: (-r["supportingStatements"], r["recommendedDDL"]))
+    return out
+
+
+def _merge(
+    native: dict[str, dict[str, Any]], heuristic: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Native advisor recommendations first, then heuristic, capped."""
+    return (_native_recommendations(native) + heuristic)[:MAX_RECOMMENDATIONS]
+
+
+# heuristic fallback path (I/O)
 
 
 class _Observation:
@@ -167,19 +305,8 @@ async def _analyze_statement(
     dataverse: str | None,
     user_tag: str | None,
 ) -> list[_Observation] | dict[str, Any]:
-    """Compile one statement to a plan and derive observations, or a skip record.
-
-    Returns a list of observations on success, or a ``skipped`` dict describing
-    why this statement contributed nothing — a guard rejection or a compile error
-    — so one bad query never aborts the batch.
-    """
+    """Compile one statement to its plans and derive observations, or a skip record."""
     cleaned = strip_set_prefix(statement)
-    if not cleaned.strip():
-        return _skip(statement, ErrorType.INVALID_PARAMETER, "Empty statement.")
-    bad_function = check_unsupported_functions(cleaned)
-    if bad_function is not None:
-        return _skip(statement, ErrorType.INVALID_PARAMETER, bad_function.message)
-
     ccid = make_client_context_id(settings.agent_session_id, user_tag)
     try:
         envelope = await client.compile_query(
@@ -209,13 +336,10 @@ def _observe(
 ) -> list[_Observation]:
     """Derive per-dataset observations from one query's plans.
 
-    Datasets scanned and the full-scan flag come from the OPTIMIZED plan (the
-    optimizer is the authority on access paths). Filter field names come from the
-    UNOPTIMIZED plan, which still accesses fields by name; the optimized plan has
-    rewritten declared fields to by-index, losing the name. Fields are attributed
-    only when the query touches exactly one dataset — across a join a renamed plan
-    variable cannot be safely tied to one dataset, so fields are dropped and the
-    predicates ride along for human review instead.
+    Datasets scanned and the full-scan flag come from the OPTIMIZED plan; filter
+    field names come from the UNOPTIMIZED plan, which still accesses fields by
+    name. Fields are attributed only when the query touches exactly one dataset —
+    across a join a renamed plan variable cannot be tied to one dataset.
     """
     datasets = datasets_from_sources(optimized.data_sources, dataverse)
     if not datasets:
@@ -238,11 +362,7 @@ def _observe(
 
 
 def extract_fields_from_predicates(predicates: tuple[str, ...]) -> tuple[str, ...]:
-    """Pull candidate field paths from ``field-access-by-name`` expressions.
-
-    Order-preserving and de-duplicated. Returns an empty tuple when no field
-    accessor is present (e.g. the predicate filters only on plan variables).
-    """
+    """Pull candidate field paths from ``field-access-by-name`` expressions."""
     seen: set[str] = set()
     out: list[str] = []
     for predicate in predicates:
@@ -257,13 +377,7 @@ def extract_fields_from_predicates(predicates: tuple[str, ...]) -> tuple[str, ..
 def _aggregate(
     observations: list[_Observation], covered: dict[tuple[str, str], set[str]]
 ) -> dict[tuple[str, str, str | None], dict[str, Any]]:
-    """Fold observations into candidate (dataverse, dataset, field) records.
-
-    A field already served by an existing secondary index (it is the first key of
-    some index on that dataset) is skipped — there is nothing to recommend. A
-    dataset filtered with no attributable field becomes a single field=None
-    "review" candidate carrying the raw predicates.
-    """
+    """Fold observations into candidate (dataverse, dataset, field) records."""
     candidates: dict[tuple[str, str, str | None], dict[str, Any]] = {}
     for obs in observations:
         location = (obs.dataverse, obs.dataset)
@@ -273,7 +387,6 @@ def _aggregate(
             for field in novel_fields:
                 _accumulate(candidates, obs, field, weight)
         elif obs.full_scan and not obs.fields:
-            # Filtered (or scanned) but no field we can pin: surface for review.
             _accumulate(candidates, obs, None, weight)
     return candidates
 
@@ -289,6 +402,7 @@ def _accumulate(
     record = candidates.get(key)
     if record is None:
         record = {
+            "source": SOURCE_HEURISTIC,
             "dataverse": obs.dataverse,
             "dataset": obs.dataset,
             "field": field,
@@ -309,12 +423,12 @@ def _accumulate(
 def _rank(
     candidates: dict[tuple[str, str, str | None], dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Finalize candidates into ranked recommendations with DDL and confidence."""
+    """Finalize heuristic candidates into ranked recommendations."""
     recommendations = [_finalize(record) for record in candidates.values()]
     recommendations.sort(
         key=lambda r: (-r["score"], r["dataverse"], r["dataset"], r["field"] or "~")
     )
-    return recommendations[:MAX_RECOMMENDATIONS]
+    return recommendations
 
 
 def _finalize(record: dict[str, Any]) -> dict[str, Any]:
@@ -348,13 +462,19 @@ def _finalize(record: dict[str, Any]) -> dict[str, Any]:
 # helpers
 
 
-def _covered_first_keys(indexes: list[SecondaryIndex]) -> dict[tuple[str, str], set[str]]:
-    """Map (dataverse, dataset) to the set of fields that lead an existing index.
+def _guard(statement: str) -> dict[str, Any] | None:
+    """Reject a statement both paths would reject, returning a skip record or None."""
+    cleaned = strip_set_prefix(statement)
+    if not cleaned.strip():
+        return _skip(statement, ErrorType.INVALID_PARAMETER, "Empty statement.")
+    bad_function = check_unsupported_functions(cleaned)
+    if bad_function is not None:
+        return _skip(statement, ErrorType.INVALID_PARAMETER, bad_function.message)
+    return None
 
-    Only the first key field is treated as "covered": a composite index on
-    ``(a, b)`` already serves an equality/range filter on ``a``, so recommending a
-    standalone index on ``a`` would be redundant, while ``b`` alone is not served.
-    """
+
+def _covered_first_keys(indexes: list[SecondaryIndex]) -> dict[tuple[str, str], set[str]]:
+    """Map (dataverse, dataset) to the set of fields that lead an existing index."""
     covered: dict[tuple[str, str], set[str]] = {}
     for index in indexes:
         if index.dataverse is None or index.dataset is None or not index.key_fields:
@@ -384,6 +504,16 @@ def _index_name(dataset: str, field: str) -> str:
     return f"idx_{dataset}_{safe_field}"
 
 
+def _parse_advise_ddl(ddl: str) -> tuple[str | None, str | None, str | None]:
+    """Best-effort (dataverse, dataset, leadingField) from an advisor DDL string."""
+    match = _ADVISE_DDL_RE.search(ddl)
+    if match is None:
+        return (None, None, None)
+    dataverse, dataset, fields = match.groups()
+    first_field = fields.split(",")[0].strip().strip("`") or None
+    return (dataverse, dataset, first_field)
+
+
 def _skip(statement: str, error_type: ErrorType, message: str) -> dict[str, Any]:
     """Build a skip record (statement preview + why it contributed nothing)."""
     preview = statement.strip()
@@ -409,13 +539,19 @@ def _summarize(structured: dict[str, Any]) -> str:
     n = structured["recommendationCount"]
     analyzed = structured["statementsAnalyzed"]
     submitted = structured["statementsSubmitted"]
+    via = (
+        "the native ADVISE advisor"
+        if structured["method"] == SOURCE_ADVISE
+        else "a heuristic plan scan"
+        if structured["method"] == SOURCE_HEURISTIC
+        else "the native advisor with a heuristic fallback"
+    )
     if n == 0:
         return (
-            f"No index recommendations from {analyzed}/{submitted} analyzed statement(s): "
-            "every filtered field is already indexed, or no plan exposed a filter field."
+            f"No index recommendations from {analyzed}/{submitted} analyzed statement(s) "
+            f"via {via}: existing indexes already cover the workload's filters."
         )
     return (
-        f"{n} index recommendation(s) from {analyzed}/{submitted} analyzed statement(s), "
-        "ranked by workload frequency and full-scan impact. Each recommendedDDL is advice — "
-        "the gateway will not run it."
+        f"{n} index recommendation(s) from {analyzed}/{submitted} analyzed statement(s) "
+        f"via {via}. Each recommendedDDL is advice — the gateway will not run it."
     )

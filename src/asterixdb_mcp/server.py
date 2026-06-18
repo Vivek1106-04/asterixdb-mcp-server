@@ -281,16 +281,17 @@ GET_QUERY_HISTORY_DESCRIPTION = (
 )
 
 RECOMMEND_INDEXES_DESCRIPTION = (
-    "Recommend secondary indexes for a WORKLOAD of representative SQL++ SELECTs. Compile-only and "
-    "read-only: it compiles each statement to its optimized plan, finds datasets that are full-"
-    "scanned and filter fields with no covering index, and returns recommendations ranked by how "
-    "often a field is filtered across the workload and whether those queries fall back to a full "
-    "scan. AsterixDB has no hypothetical-index facility, so recommendations are scored off plan "
-    "predicates, not a simulated re-cost. Each recommendation carries a `recommendedDDL` "
-    "(CREATE INDEX ...) and a `confidence`; the gateway is READ-ONLY and will NOT run the DDL — "
-    "it is advice for you or an operator to apply. A statement that does not compile is reported "
-    "in `skipped` rather than failing the batch. Pass complete SELECTs; qualify names or set "
-    "`dataverse`. For a single slow query, prefer check_index_usage."
+    "Recommend secondary indexes for a WORKLOAD of representative SQL++ SELECTs. Read-only: it "
+    "runs AsterixDB's NATIVE cost-based index advisor (`ADVISE`) on each statement — the engine "
+    "costs hypothetical indexes through its optimizer and returns the indexes it would create — "
+    "and aggregates the `recommended_indexes` across the workload, ranked by how many statements "
+    "want each. When a cluster does not support `ADVISE`, it falls back to a heuristic plan scan. "
+    "`method` reports which path was used; `currentIndexes` lists indexes already present. Each "
+    "recommendation carries a `recommendedDDL` (CREATE INDEX ...) and a `confidence`; the gateway "
+    "is READ-ONLY and will NOT run the DDL — it is advice for you or an operator to apply. A "
+    "statement neither path can use is reported in `skipped` rather than failing the batch. Pass "
+    "complete SELECTs; qualify names or set `dataverse`. For a single slow query, prefer "
+    "check_index_usage."
 )
 
 
