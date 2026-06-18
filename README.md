@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**21 tools, 11 resources, 4 resource templates, 6 prompts.** Tools perform
+**22 tools, 11 resources, 4 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -53,6 +53,7 @@ a failed call to be rejected.
 | Analyze | `validate_syntax` | Compile-only syntax check, no execution. |
 | Analyze | `explain_query` | Optimizer plan for a statement. |
 | Analyze | `check_index_usage` | Whether a query's predicates hit an index. |
+| Analyze | `recommend_indexes` | Ranked `CREATE INDEX` suggestions scored from a query workload. |
 | Discover | `list_dataverses` | Enumerate dataverses on the cluster. |
 | Discover | `list_datasets` | Paginated dataset discovery, optionally scoped to a dataverse. |
 | Discover | `describe_dataverse` | Datasets, types, indexes, and functions in one dataverse. |
@@ -104,7 +105,7 @@ autocomplete through `completion/complete`.
 | `analyze_dataverse` | Bootstraps exploration with inventory + safety rules. |
 | `build_aggregation_query` | Guides building a `GROUP BY` / aggregation query. |
 | `analyze_query_performance` | Walks plan + index analysis for a slow query. |
-| `recommend_indexes` | Suggests indexes from a query workload. |
+| `recommend_indexes` | Scaffolds the index-suggestion workflow (the `recommend_indexes` tool computes it). |
 | `explore_nested_data` | Navigates nested / ROW vs COLUMNAR structures. |
 | `explain_error` | Turns a gateway/CC error into a fix. |
 
