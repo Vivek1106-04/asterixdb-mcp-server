@@ -308,6 +308,47 @@ async def test_explain_query_call() -> None:
     assert result.structuredContent["plan"]["dataSources"] == ["DV.Events"]
 
 
+async def test_explain_physical_plan_call() -> None:
+    job = {
+        "status": "success",
+        "plans": {
+            "job": {
+                "operators": [
+                    {
+                        "id": "ODID:1",
+                        "java-class": "a.b.BTreeSearchOperatorDescriptor",
+                        "in-arity": 0,
+                        "out-arity": 1,
+                        "partition-constraints": {"count": 4},
+                    }
+                ],
+                "connectors": [
+                    {
+                        "in-operator-id": "ODID:1",
+                        "out-operator-id": "ODID:2",
+                        "connector": {"java-class": "a.b.MToNBroadcastConnectorDescriptor"},
+                    }
+                ],
+            }
+        },
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        # The job is requested compile-only with job=true, never via EXPLAIN.
+        body = req.content.decode()
+        assert "job=true" in body
+        assert "compile-only=true" in body
+        assert "EXPLAIN" not in body
+        return httpx.Response(200, json=job)
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool("explain_physical_plan", {"statement": "SELECT 1;"})
+    parsed = result.structuredContent["job"]
+    assert parsed["operatorCounts"] == {"BTreeSearch": 1}
+    assert parsed["connectorCounts"] == {"MToNBroadcast": 1}
+    assert parsed["maxPartitionCount"] == 4
+
+
 async def test_config_parameters_resource_read() -> None:
     def handler(_req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={})

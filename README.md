@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**22 tools, 11 resources, 6 resource templates, 6 prompts.** Tools perform
+**23 tools, 11 resources, 6 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -52,6 +52,7 @@ a failed call to be rejected.
 | Query | `cancel_query` | Cancel an in-flight async query. |
 | Analyze | `validate_syntax` | Compile-only syntax check, no execution. |
 | Analyze | `explain_query` | Optimizer plan for a statement. |
+| Analyze | `explain_physical_plan` | Physical Hyracks job: operator/connector DAG and parallelism. |
 | Analyze | `check_index_usage` | Whether a query's predicates hit an index. |
 | Analyze | `recommend_indexes` | CREATE INDEX advice from a workload via the cluster's native `ADVISE` advisor. |
 | Discover | `list_dataverses` | Enumerate dataverses on the cluster. |

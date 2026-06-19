@@ -78,6 +78,7 @@ from .tools.health_check import run_database_health_check
 from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
+from .tools.physical_plan import run_explain_physical_plan
 from .tools.query_history import record_query, run_get_query_history
 from .tools.recommend_indexes import run_recommend_indexes
 from .tools.sample_dataset import run_sample_dataset
@@ -208,6 +209,16 @@ EXPLAIN_QUERY_DESCRIPTION = (
     "structured operator tree: operator kinds and counts, the datasets scanned, predicates, "
     "and plan depth. Use it to understand how a query will execute and which access paths it "
     "uses before paying to run it."
+)
+
+EXPLAIN_PHYSICAL_PLAN_DESCRIPTION = (
+    "Compile a SQL++ statement WITHOUT running it and return its physical Hyracks job — the "
+    "runtime plan the cluster actually executes. Where `explain_query` shows the logical plan "
+    "(what to compute), this shows HOW it runs: the operator DAG with kinds and counts, the "
+    "connectors that move data between operators (which reveal hash repartition vs broadcast), "
+    "and per-operator parallelism (partition counts). Use it to reason about data movement and "
+    "cost before running a query. Read-only and compile-only; pass a complete statement and "
+    "qualify names or set `dataverse`."
 )
 
 CHECK_INDEX_USAGE_DESCRIPTION = (
@@ -663,6 +674,22 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         ] = None,
     ) -> types.CallToolResult:
         result = await run_explain_query(
+            _client(), settings, statement=statement, dataverse=dataverse
+        )
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="explain_physical_plan",
+        description=EXPLAIN_PHYSICAL_PLAN_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["explain_physical_plan"],
+    )
+    async def explain_physical_plan(
+        statement: Annotated[str, Field(description="SQL++ statement to compile.")],
+        dataverse: Annotated[
+            str | None, Field(description="Default Dataverse for unqualified names.")
+        ] = None,
+    ) -> types.CallToolResult:
+        result = await run_explain_physical_plan(
             _client(), settings, statement=statement, dataverse=dataverse
         )
         return _to_call_tool_result(result)
