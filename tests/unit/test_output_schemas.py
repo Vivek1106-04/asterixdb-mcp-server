@@ -20,6 +20,7 @@ EXPECTED_TOOLS = {
     "cancel_query",
     "validate_syntax",
     "explain_query",
+    "explain_physical_plan",
     "check_index_usage",
     "list_functions",
     "get_function",

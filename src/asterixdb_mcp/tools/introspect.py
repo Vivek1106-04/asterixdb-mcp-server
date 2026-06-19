@@ -42,7 +42,7 @@ async def run_validate_syntax(
     except GatewayError as err:
         return ToolResult.error(err)
 
-    error = _classify_envelope_error(envelope)
+    error = classify_envelope_error(envelope)
     if error is None:
         structured = {"status": "success", "valid": True}
         return ToolResult(text="Statement compiled successfully (valid).", structured=structured)
@@ -82,7 +82,7 @@ async def run_explain_query(
     except GatewayError as err:
         return ToolResult.error(err)
 
-    error = _classify_envelope_error(envelope)
+    error = classify_envelope_error(envelope)
     if error is not None:
         # A query that does not compile has no plan to explain.
         return ToolResult.error(error)
@@ -109,7 +109,7 @@ def _summarize_plan(parsed: Any) -> str:
     )
 
 
-def _classify_envelope_error(envelope: dict[str, Any]) -> GatewayError | None:
+def classify_envelope_error(envelope: dict[str, Any]) -> GatewayError | None:
     """Return a classified error if the compile envelope reports a failure."""
     errors = envelope.get("errors")
     if isinstance(errors, list) and errors and isinstance(errors[0], dict):

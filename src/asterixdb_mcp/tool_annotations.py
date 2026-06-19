@@ -41,6 +41,7 @@ _LIVE_READ_ONLY = {
     "fetch_query_result": "Fetch Async Query Result",
     "validate_syntax": "Validate SQL++ Syntax",
     "explain_query": "Explain Query Plan",
+    "explain_physical_plan": "Explain Physical Plan",
     "check_index_usage": "Check Index Usage",
     "list_functions": "List SQL++ Functions",
     "get_function": "Get Function Details",

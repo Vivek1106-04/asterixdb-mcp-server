@@ -61,6 +61,7 @@ async def test_advertises_exactly_the_expected_tools(server) -> None:
         "cancel_query",
         "validate_syntax",
         "explain_query",
+        "explain_physical_plan",
         "check_index_usage",
         "list_functions",
         "get_function",

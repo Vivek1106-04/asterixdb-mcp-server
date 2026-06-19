@@ -38,6 +38,10 @@ STATUS_FIELD = "status"
 # The async-result plan format that yields a JSON operator tree (clean_json).
 PLAN_FORMAT_JSON = "clean_json"
 
+# The Hyracks job-output format. JSON yields the physical operator/connector DAG
+# the gateway summarizes; the alternative ("dot") is a Graphviz rendering.
+HYRACKS_JOB_FORMAT_JSON = "json"
+
 # Acceptable JSON values that the CC may use for a successful query envelope.
 _SUCCESS_STATUSES = frozenset({"success"})
 
@@ -128,6 +132,7 @@ class CCClient:
         dataverse: str | None = None,
         emit_plan: bool = False,
         emit_unoptimized_plan: bool = False,
+        emit_job: bool = False,
         signature: bool = False,
         statement_parameters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -143,7 +148,9 @@ class CCClient:
         ``emit_unoptimized_plan`` is also set, the unoptimized logical plan
         (``plans.logicalPlan``) is requested too — it retains field-access-BY-NAME
         that the optimizer rewrites to by-index, so a caller that needs filter
-        field names reads it.
+        field names reads it. When ``emit_job`` is set, the physical Hyracks job
+        (``plans.job``) is requested — the runtime operator/connector DAG, which
+        the CC generates at compile time, so it is available without execution.
         """
         form = self._build_query_form(
             statement,
@@ -157,6 +164,7 @@ class CCClient:
             compile_only=True,
             emit_plan=emit_plan,
             emit_unoptimized_plan=emit_unoptimized_plan,
+            emit_job=emit_job,
         )
         return await self._post_query(form)
 
@@ -223,6 +231,7 @@ class CCClient:
         compile_only: bool = False,
         emit_plan: bool = False,
         emit_unoptimized_plan: bool = False,
+        emit_job: bool = False,
     ) -> dict[str, str]:
         """Assemble the /query/service form parameters.
 
@@ -254,6 +263,11 @@ class CCClient:
             # filter field names the optimizer rewrites away.
             form["logical-plan"] = "true"
             form["plan-format"] = PLAN_FORMAT_JSON
+        if emit_job:
+            # The physical Hyracks job DAG, generated at compile time and emitted
+            # as JSON so the gateway can summarize operators and connectors.
+            form["job"] = "true"
+            form["hyracks-job-format"] = HYRACKS_JOB_FORMAT_JSON
         if compiler_parameters:
             # Tuning knobs are validated against the allowlist in the tool layer
             # before they get here; forward them verbatim.

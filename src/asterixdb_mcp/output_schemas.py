@@ -211,6 +211,14 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         required=("plan",),
         description="The optimized logical plan as a structured operator tree.",
     ),
+    "explain_physical_plan": _obj(
+        {
+            "status": _STRING,
+            "job": _OBJECT,
+        },
+        required=("job",),
+        description="The physical Hyracks job: operator/connector DAG, counts, and parallelism.",
+    ),
     "check_index_usage": _obj(
         {
             "status": _STRING,
