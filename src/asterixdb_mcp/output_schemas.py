@@ -207,9 +207,11 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
             "status": _STRING,
             "valid": _BOOL,
             "plan": _OBJECT,
+            "warnings": {"type": "array"},
+            "hints": _array_of_objects(),
         },
         required=("plan",),
-        description="The optimized logical plan as a structured operator tree.",
+        description="The optimized logical plan, optimizer warnings, and directional hints.",
     ),
     "explain_physical_plan": _obj(
         {

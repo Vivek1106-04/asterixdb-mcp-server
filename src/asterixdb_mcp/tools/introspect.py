@@ -19,6 +19,7 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError, classify_cc_error
+from ..hint_deriver import hints_payload
 from ..plan_parser import parse_optimized_plan
 from ..statement_guard import strip_set_prefix
 from . import ToolResult
@@ -96,16 +97,29 @@ async def run_explain_query(
             )
         )
 
-    structured = {"status": "success", "plan": parsed.to_dict()}
-    return ToolResult(text=_summarize_plan(parsed), structured=structured)
+    structured: dict[str, Any] = {"status": "success", "plan": parsed.to_dict()}
+
+    # Pass the optimizer's own warnings through verbatim — they flag unused hints
+    # and cardinality surprises the gateway never re-derives.
+    warnings = envelope.get("warnings")
+    if warnings:
+        structured["warnings"] = warnings
+
+    # Directional hints composed from plan signals (full scan, broadcast join).
+    hints = hints_payload(parsed)
+    if hints:
+        structured["hints"] = hints
+
+    return ToolResult(text=_summarize_plan(parsed, hints), structured=structured)
 
 
-def _summarize_plan(parsed: Any) -> str:
+def _summarize_plan(parsed: Any, hints: list[dict[str, Any]]) -> str:
     """One-line human summary of a parsed plan for the content text block."""
     sources = ", ".join(parsed.data_sources) if parsed.data_sources else "no data source"
+    hint_note = f"; {len(hints)} optimization hint(s)" if hints else ""
     return (
         f"Plan depth {parsed.depth} over {sources}; "
-        f"{len(parsed.operator_counts)} operator kind(s)."
+        f"{len(parsed.operator_counts)} operator kind(s){hint_note}."
     )
 
 

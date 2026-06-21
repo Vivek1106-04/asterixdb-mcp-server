@@ -481,6 +481,7 @@ async def test_cluster_diagnostics_resource_read() -> None:
         "asterixdb://reference/type-system",
         "asterixdb://reference/error-codes",
         "asterixdb://reference/query-examples",
+        "asterixdb://reference/query-hints",
     ],
 )
 async def test_reference_resources_read(uri: str) -> None:

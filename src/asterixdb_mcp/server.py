@@ -46,6 +46,7 @@ from .resources.reference import (
     read_error_codes,
     read_index_types,
     read_query_examples,
+    read_query_hints,
     read_sqlpp_syntax,
     read_type_system,
 )
@@ -207,8 +208,10 @@ VALIDATE_SYNTAX_DESCRIPTION = (
 EXPLAIN_QUERY_DESCRIPTION = (
     "Compile a SQL++ statement WITHOUT running it and return its optimized logical plan as a "
     "structured operator tree: operator kinds and counts, the datasets scanned, predicates, "
-    "and plan depth. Use it to understand how a query will execute and which access paths it "
-    "uses before paying to run it."
+    "and plan depth. It also passes through any optimizer `warnings` and a directional `hints` "
+    "block (full scans, broadcast joins) pointing at the SQL++ levers that address them — see "
+    "the query-hints reference topic. Use it to understand how a query will execute and which "
+    "access paths it uses before paying to run it."
 )
 
 EXPLAIN_PHYSICAL_PLAN_DESCRIPTION = (
@@ -267,8 +270,9 @@ GET_NODE_DETAILS_DESCRIPTION = (
 
 GET_REFERENCE_DESCRIPTION = (
     "Read curated AsterixDB SQL++ reference material to ground yourself BEFORE writing queries: "
-    "syntax rules, the type system, index types, common error codes, worked query examples, and "
-    "the built-in function catalog. Pass a single `topic`, or `all` to retrieve every topic at "
+    "syntax rules, the type system, index types, inline optimizer hints (query-hints), common "
+    "error codes, worked query examples, and the built-in function catalog. Pass a single "
+    "`topic`, or `all` to retrieve every topic at "
     "once. This is the authoritative in-gateway documentation — prefer it over guessing syntax."
 )
 
@@ -981,6 +985,12 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     )
     async def ref_query_examples() -> str:
         return json.dumps(read_query_examples(), default=str)
+
+    @mcp.resource(
+        "asterixdb://reference/query-hints", name="Query Hints", mime_type="application/json"
+    )
+    async def ref_query_hints() -> str:
+        return json.dumps(read_query_hints(), default=str)
 
     # Prompts
 

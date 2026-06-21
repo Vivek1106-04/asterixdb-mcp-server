@@ -158,6 +158,7 @@ async def test_advertises_expected_resources(server) -> None:
         "type-system",
         "error-codes",
         "query-examples",
+        "query-hints",
     ):
         assert f"asterixdb://reference/{ref}" in uris
 

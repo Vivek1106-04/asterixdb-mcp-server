@@ -18,6 +18,7 @@ from ..resources.reference import (
     read_error_codes,
     read_index_types,
     read_query_examples,
+    read_query_hints,
     read_sqlpp_syntax,
     read_type_system,
 )
@@ -29,6 +30,7 @@ _READERS: dict[str, Callable[[], dict[str, Any]]] = {
     "type-system": read_type_system,
     "index-types": read_index_types,
     "query-examples": read_query_examples,
+    "query-hints": read_query_hints,
     "error-codes": read_error_codes,
     "builtin-functions": read_builtin_functions,
 }
