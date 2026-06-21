@@ -116,6 +116,55 @@ def read_error_codes() -> dict[str, Any]:
     )
 
 
+def read_query_hints() -> dict[str, Any]:
+    """SQL++ inline optimizer hints the agent can write into a statement."""
+    return _wrap(
+        "query-hints",
+        {
+            "note": (
+                "Inline hints are /*+ name */ comments placed just before the clause or "
+                "predicate they steer. They are advisory; the optimizer may ignore one and "
+                "raises a warning when it does."
+            ),
+            "hints": [
+                {
+                    "name": "indexnl",
+                    "syntax": "FROM a, b WHERE /*+ indexnl */ a.k = b.k",
+                    "use": "Force an index nested-loop join (probe the inner side's index) "
+                    "instead of a hash join.",
+                },
+                {
+                    "name": "hashjoin",
+                    "syntax": "FROM a, b WHERE /*+ hashjoin build (a) */ a.k = b.k",
+                    "use": "Force a hash join and name the build (smaller) input.",
+                },
+                {
+                    "name": "hash-bcast",
+                    "syntax": "FROM a, b WHERE /*+ hash-bcast */ a.k = b.k",
+                    "use": "Broadcast one join input to every partition; use only when that "
+                    "side is small.",
+                },
+                {
+                    "name": "use-index",
+                    "syntax": "WHERE /*+ use-index(idx_name) */ a.field = $v",
+                    "use": "Direct the optimizer to a specific secondary index.",
+                },
+                {
+                    "name": "skip-index",
+                    "syntax": "WHERE /*+ skip-index */ a.field = $v",
+                    "use": "Disable index access for a predicate and force a scan.",
+                },
+                {
+                    "name": "hash (group by)",
+                    "syntax": "GROUP BY /*+ hash */ a.city",
+                    "use": "Force hash-based aggregation rather than a sort-based group by.",
+                },
+            ],
+            "hint": "explain_query flags full scans and broadcast joins; pick a hint here to act.",
+        },
+    )
+
+
 def read_query_examples() -> dict[str, Any]:
     """Worked, copy-adaptable SQL++ examples."""
     return _wrap(

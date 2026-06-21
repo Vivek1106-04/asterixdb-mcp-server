@@ -138,3 +138,31 @@ async def test_explain_summary_text_mentions_depth_and_source(settings: Settings
     result = await run_explain_query(cap.client, settings, statement="SELECT 1;")
     assert "Yelp.Business" in result.text
     assert "depth" in result.text
+
+
+async def test_explain_emits_full_scan_hint(settings: Settings) -> None:
+    # The data-scan plan triggers the full-scan optimization hint.
+    cap = make_capturing_cc(settings, response_json=_PLAN_ENVELOPE)
+    result = await run_explain_query(cap.client, settings, statement="SELECT 1;")
+    codes = {hint["code"] for hint in result.structured["hints"]}
+    assert "full-scan" in codes
+    assert "optimization hint" in result.text
+
+
+async def test_explain_passes_optimizer_warnings_through(settings: Settings) -> None:
+    envelope = {**_PLAN_ENVELOPE, "warnings": [{"code": "ASX1107", "msg": "Unused hint"}]}
+    cap = make_capturing_cc(settings, response_json=envelope)
+    result = await run_explain_query(cap.client, settings, statement="SELECT 1;")
+    assert result.structured["warnings"] == [{"code": "ASX1107", "msg": "Unused hint"}]
+
+
+async def test_explain_omits_hints_and_warnings_when_clean(settings: Settings) -> None:
+    # A plan with no scan and no warnings carries neither optional block.
+    envelope = {
+        "status": "success",
+        "plans": {"optimizedLogicalPlan": {"operator": "distribute-result", "inputs": []}},
+    }
+    cap = make_capturing_cc(settings, response_json=envelope)
+    result = await run_explain_query(cap.client, settings, statement="SELECT 1;")
+    assert "hints" not in result.structured
+    assert "warnings" not in result.structured

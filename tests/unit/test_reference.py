@@ -1,4 +1,4 @@
-"""Unit tests for the six static reference resources."""
+"""Unit tests for the static reference resources."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from asterixdb_mcp.resources.reference import (
     read_error_codes,
     read_index_types,
     read_query_examples,
+    read_query_hints,
     read_sqlpp_syntax,
     read_type_system,
 )
@@ -51,3 +52,13 @@ def test_query_examples() -> None:
     ref = read_query_examples()
     assert ref["examples"]
     assert all("sql" in ex for ex in ref["examples"])
+
+
+def test_query_hints() -> None:
+    ref = read_query_hints()
+    assert ref["reference"] == "query-hints"
+    assert ref["version"] == REFERENCE_VERSION
+    # Each hint must carry the actual /*+ ... */ syntax the agent will write.
+    assert all("/*+" in h["syntax"] for h in ref["hints"])
+    names = {h["name"] for h in ref["hints"]}
+    assert "indexnl" in names

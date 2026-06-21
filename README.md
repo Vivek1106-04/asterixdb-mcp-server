@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**23 tools, 11 resources, 6 resource templates, 6 prompts.** Tools perform
+**23 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -84,6 +84,7 @@ a failed call to be rejected.
 | `asterixdb://reference/type-system` | SQL++ / ADM type system. |
 | `asterixdb://reference/error-codes` | Gateway error taxonomy. |
 | `asterixdb://reference/query-examples` | Worked SQL++ examples. |
+| `asterixdb://reference/query-hints` | Inline SQL++ optimizer hints. |
 
 ### Resource templates
 
