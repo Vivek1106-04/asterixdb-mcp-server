@@ -47,6 +47,7 @@ from ..plan_parser import (
     parse_optimized_plan,
     parse_plan,
 )
+from ..sample_stats import fetch_analyzed_datasets
 from ..statement_guard import check_unsupported_functions, strip_set_prefix
 from . import ToolResult
 
@@ -140,6 +141,11 @@ async def run_recommend_indexes(
         observations.extend(outcome)
 
     recommendations = _merge(native, _rank(_aggregate(observations, covered)))
+    # Statistics freshness: the advisor and the CBO cost indexes from each
+    # dataset's ANALYZE sample, so flag recommendations whose dataset was never
+    # analyzed — the advice there rests on no statistics.
+    analyzed_datasets = await fetch_analyzed_datasets(client, ccid, dataverse=dataverse)
+    unanalyzed = _mark_analyzed(recommendations, analyzed_datasets)
     method = SOURCE_ADVISE if native_used == analyzed and analyzed else (
         SOURCE_HEURISTIC if native_used == 0 else "mixed"
     )
@@ -156,7 +162,35 @@ async def run_recommend_indexes(
         "recommendations": recommendations,
         "skipped": skipped,
     }
+    if unanalyzed:
+        structured["unanalyzedDatasets"] = sorted(unanalyzed)
+        structured["statisticsNote"] = (
+            "Some recommended datasets have no ANALYZE sample, so the advisor and the "
+            "cost-based optimizer planned them without statistics — treat their advice as "
+            "lower-confidence. Run ANALYZE DATASET on each, then re-run. "
+            "Check any dataset with get_dataset_statistics."
+        )
     return ToolResult(text=_summarize(structured), structured=structured)
+
+
+def _mark_analyzed(
+    recommendations: list[dict[str, Any]], analyzed_datasets: set[tuple[str, str]]
+) -> set[str]:
+    """Tag each recommendation with whether its dataset is analyzed; return the gaps.
+
+    Recommendations without a resolved dataverse+dataset (low-confidence heuristic
+    entries) carry no statistics signal and are left untagged.
+    """
+    unanalyzed: set[str] = set()
+    for rec in recommendations:
+        dataverse, dataset = rec.get("dataverse"), rec.get("dataset")
+        if not isinstance(dataverse, str) or not isinstance(dataset, str):
+            continue
+        is_analyzed = (dataverse, dataset) in analyzed_datasets
+        rec["analyzed"] = is_analyzed
+        if not is_analyzed:
+            unanalyzed.add(f"{dataverse}.{dataset}")
+    return unanalyzed
 
 
 # native ADVISE path (I/O)

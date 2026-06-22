@@ -72,6 +72,9 @@ async def test_advertises_exactly_the_expected_tools(server) -> None:
         "database_health_check",
         "get_query_history",
         "recommend_indexes",
+        "get_dataset_statistics",
+        "list_running_queries",
+        "profile_query",
     }
 
 

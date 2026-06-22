@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**23 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
+**26 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -55,16 +55,19 @@ a failed call to be rejected.
 | Analyze | `explain_physical_plan` | Physical Hyracks job: operator/connector DAG and parallelism. |
 | Analyze | `check_index_usage` | Whether a query's predicates hit an index. |
 | Analyze | `recommend_indexes` | CREATE INDEX advice from a workload via the cluster's native `ADVISE` advisor. |
+| Analyze | `profile_query` | Run a query with profiling; per-operator runtime actuals (EXPLAIN ANALYZE). |
 | Discover | `list_dataverses` | Enumerate dataverses on the cluster. |
 | Discover | `list_datasets` | Paginated dataset discovery, optionally scoped to a dataverse. |
 | Discover | `describe_dataverse` | Datasets, types, indexes, and functions in one dataverse. |
 | Discover | `get_schema` | Single-dataset schema incl. `datasetFormatInfo` (ROW/COLUMNAR). |
 | Discover | `sample_dataset` | A small bounded row sample from a dataset. |
 | Discover | `search_metadata` | Cross-metadata search for datasets/types/indexes/functions. |
+| Discover | `get_dataset_statistics` | Sampled row-count/size estimate and ANALYZE freshness for a dataset. |
 | Functions | `list_functions` | Built-in / user-defined functions, filtered by language. |
 | Functions | `get_function` | One function's signature, with near-name hints on a miss. |
 | Cluster | `get_cluster_status` | Live cluster state and node roster. |
 | Cluster | `get_node_details` | Per-node diagnostics for a validated node id. |
+| Cluster | `list_running_queries` | In-flight cluster requests; the read side of the cancel lifecycle. |
 | Health | `database_health_check` | Metadata scan for duplicate/redundant indexes and ROW-vs-COLUMNAR candidates. |
 | Health | `get_query_history` | Recent session queries with outcome and classified error, for self-debugging. |
 | Docs | `get_reference` | SQL++ reference docs by topic. |

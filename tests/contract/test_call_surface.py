@@ -618,6 +618,95 @@ async def test_recommend_indexes_call_uses_native_advise() -> None:
     assert result.structuredContent["recommendations"][0]["recommendedDDL"] == ddl + ";"
 
 
+async def test_get_dataset_statistics_call() -> None:
+    sample = {
+        "dataverse": "DV",
+        "dataset": "Events",
+        "rowCount": 1000,
+        "avgItemSize": 200,
+        "sampleTarget": 1063,
+    }
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": [sample]})
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool(
+        "get_dataset_statistics", {"dataverse": "DV", "dataset": "Events"}
+    )
+    assert result.isError is False
+    assert result.structuredContent["analyzed"] is True
+    assert result.structuredContent["statistics"]["estimatedSizeBytes"] == 200000
+
+
+async def test_list_running_queries_call() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/admin/requests/running"
+        assert req.url.params.get("redact") == "true"
+        return httpx.Response(200, json=[{"requestId": "r1", "state": "running"}])
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool("list_running_queries", {})
+    assert result.isError is False
+    assert result.structuredContent["count"] == 1
+    assert result.structuredContent["statementsRedacted"] is True
+
+
+async def test_profile_query_call() -> None:
+    envelope = {
+        "status": "success",
+        "metrics": {"elapsedTime": "12ms"},
+        "profile": {
+            "job-id": "JID:0",
+            "joblets": [
+                {
+                    "node-id": "nc1",
+                    "tasks": [
+                        {
+                            "counters": [
+                                {"name": "scan", "runtime-id": "ODID:1",
+                                 "run-time": 8.0, "cardinality-out": 100, "pages-read": 4}
+                            ]
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=envelope)
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool("profile_query", {"statement": "SELECT 1;"})
+    assert result.isError is False
+    profile = result.structuredContent["profile"]
+    assert profile["operators"][0]["operator"] == "scan"
+    assert profile["operators"][0]["cardinalityOut"] == 100
+
+
+async def test_profile_query_sheds_load_when_sync_pool_full() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(_req: httpx.Request) -> httpx.Response:
+        started.set()
+        await release.wait()
+        return httpx.Response(200, json={"status": "success"})
+
+    server = _server_with_mock(handler, sync_permits=1)
+    first = asyncio.create_task(server.call_tool("profile_query", {"statement": "SELECT 1;"}))
+    await started.wait()  # first call holds the only sync permit
+
+    # The second call finds the pool full and is shed with NOT_READY.
+    second = await server.call_tool("profile_query", {"statement": "SELECT 1;"})
+    assert second.isError is True
+    assert second.content[0].text.split(":")[0] == "NOT_READY"
+
+    release.set()
+    await first
+
+
 def test_main_builds_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     from mcp.server.fastmcp import FastMCP
 

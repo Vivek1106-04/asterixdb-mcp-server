@@ -28,6 +28,9 @@ EXPECTED_TOOLS = {
     "database_health_check",
     "get_query_history",
     "recommend_indexes",
+    "get_dataset_statistics",
+    "list_running_queries",
+    "profile_query",
 }
 
 
