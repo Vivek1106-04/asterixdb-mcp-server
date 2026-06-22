@@ -355,9 +355,28 @@ class CCClient:
         """GET ``/admin/diagnostics`` (per-node heap, GC, threads, disk)."""
         return await self._get_json(ADMIN_DIAGNOSTICS_PATH)
 
+    async def admin_running_requests(self, *, redact: bool) -> list[Any]:
+        """GET ``/admin/requests/running`` (the cluster's in-flight requests).
+
+        The endpoint returns a JSON array, one entry per running request. When
+        ``redact`` is set the CC strips statement text from each entry, so the
+        gateway can list activity without disclosing query bodies.
+        """
+        params = {"redact": "true"} if redact else None
+        return await self._get_json_array(ADMIN_RUNNING_REQUESTS_PATH, params=params)
+
     async def _get_json(self, path: str) -> dict[str, Any]:
+        return _parse_json_body(await self._get_body(path))
+
+    async def _get_json_array(
+        self, path: str, *, params: dict[str, str] | None = None
+    ) -> list[Any]:
+        """GET an admin endpoint that returns a JSON array (e.g. running requests)."""
+        return _parse_json_array_body(await self._get_body(path, params=params))
+
+    async def _get_body(self, path: str, *, params: dict[str, str] | None = None) -> bytes:
         try:
-            response = await self._http.get(path, headers=self._headers())
+            response = await self._http.get(path, params=params, headers=self._headers())
         except httpx.TimeoutException as exc:
             raise GatewayError(
                 ErrorType.TIMEOUT, f"AsterixDB admin endpoint {path} timed out."
@@ -366,8 +385,7 @@ class CCClient:
             raise GatewayError(
                 ErrorType.INTERNAL, f"Failed to reach AsterixDB admin endpoint {path}: {exc}"
             ) from exc
-        body = enforce_byte_ceiling(response.content, self._settings.max_bytes_per_query)
-        return _parse_json_body(body)
+        return enforce_byte_ceiling(response.content, self._settings.max_bytes_per_query)
 
     # helpers
 
@@ -400,5 +418,20 @@ def _parse_json_body(body: bytes) -> dict[str, Any]:
         raise GatewayError(
             ErrorType.INTERNAL,
             f"Expected a JSON object from AsterixDB, got {type(parsed).__name__}.",
+        )
+    return parsed
+
+
+def _parse_json_array_body(body: bytes) -> list[Any]:
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise GatewayError(
+            ErrorType.INTERNAL, f"AsterixDB returned a non-JSON response: {exc}"
+        ) from exc
+    if not isinstance(parsed, list):
+        raise GatewayError(
+            ErrorType.INTERNAL,
+            f"Expected a JSON array from AsterixDB, got {type(parsed).__name__}.",
         )
     return parsed

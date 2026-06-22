@@ -50,6 +50,9 @@ _LIVE_READ_ONLY = {
     "get_node_details": "Get Node Details",
     "database_health_check": "Database Health Check",
     "recommend_indexes": "Recommend Indexes",
+    "get_dataset_statistics": "Get Dataset Statistics",
+    "list_running_queries": "List Running Queries",
+    "profile_query": "Profile Query Runtime",
 }
 
 

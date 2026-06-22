@@ -68,6 +68,7 @@ from .tools.async_query import (
     run_wait_on_async_query,
 )
 from .tools.check_index_usage import run_check_index_usage
+from .tools.dataset_stats import run_get_dataset_statistics
 from .tools.describe_dataverse import run_describe_dataverse
 from .tools.execute_query import run_execute_query
 from .tools.functions import run_get_function, run_list_functions
@@ -80,8 +81,10 @@ from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
 from .tools.physical_plan import run_explain_physical_plan
+from .tools.profile_query import run_profile_query
 from .tools.query_history import record_query, run_get_query_history
 from .tools.recommend_indexes import run_recommend_indexes
+from .tools.running_queries import run_list_running_queries
 from .tools.sample_dataset import run_sample_dataset
 from .tools.search_metadata import run_search_metadata
 
@@ -309,6 +312,36 @@ RECOMMEND_INDEXES_DESCRIPTION = (
     "statement neither path can use is reported in `skipped` rather than failing the batch. Pass "
     "complete SELECTs; qualify names or set `dataverse`. For a single slow query, prefer "
     "check_index_usage."
+)
+
+GET_DATASET_STATISTICS_DESCRIPTION = (
+    "Report a dataset's scale from its ANALYZE sample: estimated row count, average document "
+    "size, and total size — use it to judge how big a query will be BEFORE running it (pick a "
+    "target, add a LIMIT, expect a full scan to be costly). It also reports whether the dataset "
+    "has been ANALYZEd at all: `analyzed:false` means there is no sample, so the estimates are "
+    "unavailable AND the cost-based optimizer (and recommend_indexes) plans the dataset without "
+    "statistics — run the returned `analyzeStatement` to populate them. Read-only: the gateway "
+    "never runs ANALYZE. Estimates come from the last ANALYZE and may be stale."
+)
+
+LIST_RUNNING_QUERIES_DESCRIPTION = (
+    "List the requests the cluster is currently running (cluster-wide, not just this session). "
+    "Use it to spot a long-running query, find the `clientContextID` to pass to cancel_query, or "
+    "confirm a submission is still in flight — it is the read side of the cancel lifecycle. "
+    "Statement text is REDACTED by default (identifiers and state only); set "
+    "`includeStatements:true` to include full query bodies. Read-only; takes no required "
+    "arguments."
+)
+
+PROFILE_QUERY_DESCRIPTION = (
+    "Run a SQL++ query with runtime profiling and return the ACTUALS — an EXPLAIN ANALYZE. "
+    "Unlike explain_query and explain_physical_plan, which only compile and ESTIMATE, this "
+    "EXECUTES the query and returns how long each operator ran and how many rows it really "
+    "produced, plus execution metrics. Pair it with explain_query to compare estimated vs "
+    "measured cardinality and locate a bad plan. It does real work: read-only (`readonly=true` "
+    "is forced), a LIMIT is enforced as on execute_query so the profile reflects the bounded "
+    "statement, and result ROWS are NOT returned — use execute_query for data. Qualify names or "
+    "set `dataverse`."
 )
 
 
@@ -861,6 +894,62 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         result = await run_recommend_indexes(
             _client(), settings, statements=statements, dataverse=dataverse
         )
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="get_dataset_statistics",
+        description=GET_DATASET_STATISTICS_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["get_dataset_statistics"],
+    )
+    async def get_dataset_statistics(
+        dataverse: Annotated[str, Field(description="Dataverse containing the dataset.")],
+        dataset: Annotated[str, Field(description="Dataset to size.")],
+    ) -> types.CallToolResult:
+        result = await run_get_dataset_statistics(
+            _client(), settings, dataverse=dataverse, dataset=dataset
+        )
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="list_running_queries",
+        description=LIST_RUNNING_QUERIES_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["list_running_queries"],
+    )
+    async def list_running_queries(
+        includeStatements: Annotated[
+            bool, Field(description="If true, include full statement text (redacted by default).")
+        ] = False,
+    ) -> types.CallToolResult:
+        result = await run_list_running_queries(
+            _client(), settings, include_statements=includeStatements
+        )
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="profile_query",
+        description=PROFILE_QUERY_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["profile_query"],
+    )
+    async def profile_query(
+        statement: Annotated[str, Field(description="SQL++ statement to run and profile.")],
+        dataverse: Annotated[
+            str | None, Field(description="Default Dataverse for unqualified names.")
+        ] = None,
+        limit: Annotated[int, Field(ge=1, le=1000, description="LIMIT enforced on the run.")] = 100,
+    ) -> types.CallToolResult:
+        # Executes a query; bound concurrency through the sync permit pool like
+        # execute_query so profiling cannot fan out unbounded blocking runs.
+        try:
+            async with pools.sync.acquire():
+                result = await run_profile_query(
+                    _client(),
+                    settings,
+                    statement=statement,
+                    dataverse=dataverse,
+                    limit=limit,
+                )
+        except GatewayError as err:
+            result = ToolResult.error(err)
         return _to_call_tool_result(result)
 
     # Resources

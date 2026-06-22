@@ -343,6 +343,56 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         description="Ranked CREATE INDEX recommendations from AsterixDB's native ADVISE advisor "
         "(heuristic plan-scan fallback).",
     ),
+    "get_dataset_statistics": _obj(
+        {
+            "status": _STRING,
+            "dataverse": _STRING,
+            "dataset": _STRING,
+            "analyzed": _BOOL,
+            "statistics": _obj(
+                {
+                    "rowCountEstimate": _INT,
+                    "avgItemSizeBytes": _INT,
+                    "estimatedSizeBytes": _INT,
+                    "sampleTarget": _INT,
+                }
+            ),
+            "analyzeStatement": _STRING,
+            "note": _STRING,
+        },
+        required=("dataverse", "dataset", "analyzed"),
+        description="A dataset's sampled row-count/size estimates and whether it has been "
+        "ANALYZEd; analyzed:false means the optimizer has no statistics for it.",
+    ),
+    "list_running_queries": _obj(
+        {
+            "status": _STRING,
+            "count": _INT,
+            "statementsRedacted": _BOOL,
+            "queries": _array_of_objects(),
+        },
+        required=("count", "queries"),
+        description="The requests the cluster is currently running; statement text is redacted "
+        "unless includeStatements is set.",
+    ),
+    "profile_query": _obj(
+        {
+            "status": _STRING,
+            "clientContextID": _STRING,
+            "effectiveStatement": _STRING,
+            "metrics": _OBJECT,
+            "profile": _obj(
+                {
+                    "operatorCount": _INT,
+                    "operators": _array_of_objects(),
+                    "jobId": _STRING,
+                }
+            ),
+        },
+        required=("clientContextID",),
+        description="Runtime actuals from executing a query with profiling: per-operator run "
+        "time and output cardinality, plus execution metrics (no result rows).",
+    ),
 }
 
 

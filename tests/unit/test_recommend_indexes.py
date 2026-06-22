@@ -17,6 +17,7 @@ from asterixdb_mcp.tools.recommend_indexes import (
     _covered_first_keys,
     _index_name,
     _index_statements,
+    _mark_analyzed,
     _parse_advise,
     _parse_advise_ddl,
     extract_fields_from_predicates,
@@ -32,6 +33,19 @@ _DDL_SKU = "CREATE INDEX idx_adv_sku ON `Default`.`Shop`.`Items`(sku)"
 
 def _form(req: httpx.Request) -> dict[str, str]:
     return {k: v[0] for k, v in parse_qs(req.content.decode()).items()}
+
+
+def test_mark_analyzed_tags_each_recommendation_and_returns_gaps() -> None:
+    recommendations = [
+        {"dataverse": "Shop", "dataset": "Orders"},  # analyzed
+        {"dataverse": "Shop", "dataset": "Items"},  # not analyzed
+        {"dataverse": None, "dataset": None},  # unresolved -> untagged
+    ]
+    unanalyzed = _mark_analyzed(recommendations, {("Shop", "Orders")})
+    assert unanalyzed == {"Shop.Items"}
+    assert recommendations[0]["analyzed"] is True
+    assert recommendations[1]["analyzed"] is False
+    assert "analyzed" not in recommendations[2]
 
 
 def _advise_env(recommended: list[str], current: list[str] | None = None) -> dict:
