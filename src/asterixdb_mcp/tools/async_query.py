@@ -20,6 +20,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from ..artifacts import ArtifactFormat, overflow_artifact_payload
 from ..audit_log import OUTCOME_SUBMITTED, AuditEntry, AuditLog
 from ..cc_client import HANDLE_FIELD, STATUS_FIELD, CCClient
 from ..compiler_params import validate_compiler_parameters
@@ -245,6 +246,7 @@ async def run_fetch_query_result(
     client_context_id: str,
     offset: int = 0,
     limit: int = DEFAULT_LIMIT,
+    download_format: ArtifactFormat | None = None,
 ) -> ToolResult:
     """Fetch and window the rows of a completed async query by its clientContextID."""
     owned = _check_ownership(settings, client_context_id)
@@ -288,6 +290,14 @@ async def run_fetch_query_result(
     window, truncation = bound_rows_for_llm(
         paged, max_rows, max_bytes, settings.max_field_chars
     )
+    more_available = (offset + limit < len(rows)) or truncation["truncated"]
+    # Persist the full result for download when the fetched window did not deliver
+    # everything (more pages, or rows trimmed for the context window).
+    artifact = overflow_artifact_payload(
+        rows, overflow=more_available, settings=settings, fmt=download_format
+    )
+    if artifact is not None:
+        truncation["artifact"] = artifact
     structured: dict[str, Any] = {
         "status": "success",
         "clientContextID": client_context_id,
@@ -295,7 +305,7 @@ async def run_fetch_query_result(
         "rowsAvailableInResponse": len(rows),
         "offset": offset,
         "limit": limit,
-        "moreAvailable": (offset + limit < len(rows)) or truncation["truncated"],
+        "moreAvailable": more_available,
         "results": window,
         "egress": truncation,
     }

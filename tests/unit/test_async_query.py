@@ -319,6 +319,38 @@ async def test_fetch_windows_rows(settings: Settings, audit: AuditLog) -> None:
     assert cap.requests[-1].url.path == "/result/x"
 
 
+async def test_fetch_overflow_writes_artifact(
+    settings: Settings, audit: AuditLog, tmp_path: object
+) -> None:
+    settings = settings.model_copy(update={"artifacts_dir": str(tmp_path)})
+    _seed_completed(audit)
+    rows = [{"i": n} for n in range(10)]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+
+    result = await run_fetch_query_result(
+        cap.client, settings, audit, client_context_id="sess-test::_::u", limit=3
+    )
+
+    artifact = result.structured["egress"]["artifact"]
+    assert artifact["totalRows"] == 10  # full async result saved, window was 3
+
+
+async def test_fetch_no_overflow_writes_no_artifact(
+    settings: Settings, audit: AuditLog, tmp_path: object
+) -> None:
+    settings = settings.model_copy(update={"artifacts_dir": str(tmp_path)})
+    _seed_completed(audit)
+    cap = make_capturing_cc(
+        settings, response_json={"status": "success", "results": [{"i": 1}]}
+    )
+
+    result = await run_fetch_query_result(
+        cap.client, settings, audit, client_context_id="sess-test::_::u", limit=20
+    )
+
+    assert "artifact" not in result.structured["egress"]
+
+
 async def test_fetch_minimizes_output_when_flagged(settings: Settings, audit: AuditLog) -> None:
     from asterixdb_mcp.plan_guard import ADVISORY_TYPE
     from asterixdb_mcp.tools.execute_query import COLUMNAR_FLAGGED_MAX_ROWS

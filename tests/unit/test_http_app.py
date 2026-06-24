@@ -96,6 +96,45 @@ def test_build_http_app_none_warns_and_serves_health(
         assert client.get(HEALTH_PATH).status_code == 200
 
 
+def _artifact_app(tmp_path: object, **overrides: object) -> tuple[object, str]:
+    """Build an http app with a single saved artifact; return (app, artifact_id)."""
+    from asterixdb_mcp.artifacts import write_overflow_artifact
+
+    settings = Settings(
+        transport="http",
+        auth_mode="bearer",
+        api_key=_TOKEN,
+        artifacts_dir=str(tmp_path),
+        **overrides,
+    )
+    ref = write_overflow_artifact([{"i": 1}, {"i": 2}], settings=settings)
+    assert ref is not None
+    return build_http_app(server_module.build_server(settings), settings), ref.artifact_id
+
+
+def test_artifact_download_serves_file_with_token(tmp_path: object) -> None:
+    app, artifact_id = _artifact_app(tmp_path)
+    auth = {"Authorization": f"Bearer {_TOKEN}"}
+    with TestClient(app) as client:
+        resp = client.get(f"/artifacts/{artifact_id}", headers=auth)
+    assert resp.status_code == 200
+    assert resp.json() == [{"i": 1}, {"i": 2}]
+    assert "attachment" in resp.headers["content-disposition"]
+
+
+def test_artifact_download_requires_auth(tmp_path: object) -> None:
+    app, artifact_id = _artifact_app(tmp_path)
+    with TestClient(app) as client:
+        assert client.get(f"/artifacts/{artifact_id}").status_code == 401
+
+
+def test_artifact_download_unknown_id_is_404(tmp_path: object) -> None:
+    app, _ = _artifact_app(tmp_path)
+    with TestClient(app) as client:
+        resp = client.get("/artifacts/" + "0" * 32, headers={"Authorization": f"Bearer {_TOKEN}"})
+    assert resp.status_code == 404
+
+
 def test_build_http_app_oauth_protects_mcp() -> None:
     settings = Settings(
         transport="http",
