@@ -499,6 +499,14 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         maxWarnings: Annotated[
             int, Field(ge=0, le=100, description="Cap on compilation warnings returned.")
         ] = 5,
+        downloadFormat: Annotated[
+            Literal["json", "txt"] | None,
+            Field(
+                description="Serialization for the downloadable overflow file when a result "
+                "is too large to return in full: 'json' (array) or 'txt' (one row per line). "
+                "Defaults to the server's configured format."
+            ),
+        ] = None,
     ) -> types.CallToolResult:
         # The sync permit pool bounds concurrent blocking queries; a full pool
         # sheds load with NOT_READY rather than queueing.
@@ -515,6 +523,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
                     profile=profile,
                     signature=signature,
                     max_warnings=maxWarnings,
+                    download_format=downloadFormat,
                 )
         except GatewayError as err:
             result = ToolResult.error(err)
@@ -586,9 +595,21 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         dataverse: Annotated[str, Field(description="Dataverse containing the dataset.")],
         dataset: Annotated[str, Field(description="Dataset to sample.")],
         size: Annotated[int, Field(ge=1, le=100, description="Rows to sample.")] = 10,
+        downloadFormat: Annotated[
+            Literal["json", "txt"] | None,
+            Field(
+                description="Serialization for the downloadable overflow file when the sample "
+                "is too large to return in full: 'json' (array) or 'txt' (one row per line)."
+            ),
+        ] = None,
     ) -> types.CallToolResult:
         result = await run_sample_dataset(
-            _client(), settings, dataverse=dataverse, dataset=dataset, size=size
+            _client(),
+            settings,
+            dataverse=dataverse,
+            dataset=dataset,
+            size=size,
+            download_format=downloadFormat,
         )
         return _to_call_tool_result(result)
 
@@ -655,6 +676,13 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         ],
         offset: Annotated[int, Field(ge=0, description="Row window offset.")] = 0,
         limit: Annotated[int, Field(ge=1, le=1000, description="Max rows to return.")] = 20,
+        downloadFormat: Annotated[
+            Literal["json", "txt"] | None,
+            Field(
+                description="Serialization for the downloadable overflow file when the result "
+                "is too large to return in full: 'json' (array) or 'txt' (one row per line)."
+            ),
+        ] = None,
     ) -> types.CallToolResult:
         result = await run_fetch_query_result(
             _client(),
@@ -663,6 +691,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             client_context_id=clientContextID,
             offset=offset,
             limit=limit,
+            download_format=downloadFormat,
         )
         return _to_call_tool_result(result)
 

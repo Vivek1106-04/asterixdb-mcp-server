@@ -44,6 +44,12 @@ DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 19200
 DEFAULT_HTTP_PATH = "/mcp"  # Streamable HTTP endpoint path
 HEALTH_PATH = "/health"  # unauthenticated liveness probe path
+ARTIFACTS_PATH_PREFIX = "/artifacts"  # download route prefix for overflow artifacts
+
+# Overflow artifacts: when a result is truncated for the LLM's context window, the
+# full result is written to a downloadable file so no data is lost.
+DEFAULT_ARTIFACTS_TTL_S = 3600.0  # how long a saved result file is retained before purge
+DEFAULT_ARTIFACTS_FORMAT: Literal["json", "txt"] = "json"  # default download serialization
 
 # Authentication. none = open (allowed on loopback only); bearer = shared static
 # token; oauth = OAuth 2.1 resource-server JWT validation against an external AS.
@@ -148,6 +154,33 @@ class Settings(BaseSettings):
         default=DEFAULT_MAX_FIELD_CHARS,
         ge=1,
         description="Max characters of any single string field value before it is clamped.",
+    )
+
+    # Overflow artifacts (the full result a truncated response could not deliver)
+    artifacts_enabled: bool = Field(
+        default=True,
+        description="When true, a truncated result's full row set is written to a "
+        "downloadable file and referenced in the egress metadata.",
+    )
+    artifacts_dir: str = Field(
+        default="",
+        description="Directory for overflow artifact files. Empty means a per-process "
+        "temp directory chosen at runtime.",
+    )
+    artifacts_ttl_s: float = Field(
+        default=DEFAULT_ARTIFACTS_TTL_S,
+        gt=0,
+        description="Seconds an overflow artifact file is retained before it is purged.",
+    )
+    artifacts_format: Literal["json", "txt"] = Field(
+        default=DEFAULT_ARTIFACTS_FORMAT,
+        description="Default serialization for overflow artifacts: 'json' (pretty array) "
+        "or 'txt' (one JSON row per line).",
+    )
+    artifacts_base_url: str = Field(
+        default="",
+        description="Override base URL used to build artifact download links. Empty means "
+        "derive from the HTTP bind (http transport) or omit the link (stdio).",
     )
 
     # Transport selection and HTTP server binding

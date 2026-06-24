@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from asterixdb_mcp.config import Settings
@@ -10,6 +13,63 @@ from asterixdb_mcp.tools.execute_query import MAX_LIMIT, run_execute_query
 from tests.conftest import make_capturing_cc
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_overflow_writes_downloadable_artifact(settings: Settings, tmp_path: Path) -> None:
+    settings = settings.model_copy(update={"artifacts_dir": str(tmp_path)})
+    rows = [{"i": n} for n in range(10)]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+
+    result = await run_execute_query(
+        cap.client, settings, statement="SELECT i FROM x LIMIT 10;", limit=3
+    )
+
+    artifact = result.structured["egress"]["artifact"]
+    assert artifact["totalRows"] == 10  # the full set, not just the 3-row window
+    assert json.loads(Path(artifact["localPath"]).read_bytes()) == rows
+
+
+async def test_no_overflow_attaches_no_artifact(settings: Settings, tmp_path: Path) -> None:
+    settings = settings.model_copy(update={"artifacts_dir": str(tmp_path)})
+    rows = [{"i": n} for n in range(3)]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+
+    result = await run_execute_query(cap.client, settings, statement="SELECT 1;", limit=20)
+
+    assert "artifact" not in result.structured["egress"]
+    assert list(tmp_path.iterdir()) == []  # nothing written
+
+
+async def test_overflow_with_artifacts_disabled_attaches_nothing(
+    settings: Settings, tmp_path: Path
+) -> None:
+    settings = settings.model_copy(
+        update={"artifacts_dir": str(tmp_path), "artifacts_enabled": False}
+    )
+    rows = [{"i": n} for n in range(10)]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+
+    result = await run_execute_query(
+        cap.client, settings, statement="SELECT i FROM x LIMIT 10;", limit=3
+    )
+
+    assert result.structured["moreAvailable"] is True  # overflow signalled
+    assert "artifact" not in result.structured["egress"]  # but no file referenced
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_download_format_override_is_honored(settings: Settings, tmp_path: Path) -> None:
+    settings = settings.model_copy(update={"artifacts_dir": str(tmp_path)})
+    rows = [{"i": n} for n in range(10)]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+
+    result = await run_execute_query(
+        cap.client, settings, statement="SELECT i FROM x LIMIT 10;", limit=3, download_format="txt"
+    )
+
+    artifact = result.structured["egress"]["artifact"]
+    assert artifact["format"] == "txt"
+    assert Path(artifact["localPath"]).suffix == ".txt"
 
 
 async def test_windows_rows_by_offset_and_limit(settings: Settings) -> None:

@@ -13,6 +13,7 @@ The only interpolated tokens are validated identifiers and an integer literal.
 
 from __future__ import annotations
 
+from ..artifacts import ArtifactFormat, overflow_artifact_payload
 from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
@@ -35,6 +36,7 @@ async def run_sample_dataset(
     dataverse: str,
     dataset: str,
     size: int = DEFAULT_SIZE,
+    download_format: ArtifactFormat | None = None,
 ) -> ToolResult:
     """Return up to `size` real documents from a dataset, no SQL required."""
     size = min(max(size, 1), MAX_SIZE)
@@ -54,6 +56,13 @@ async def run_sample_dataset(
     window, egress = bound_rows_for_llm(
         rows, settings.max_rows_to_llm, settings.max_bytes_to_llm, settings.max_field_chars
     )
+    # When the sample was trimmed for the context window, save the full set of
+    # sampled documents for download instead of dropping the overflow.
+    artifact = overflow_artifact_payload(
+        rows, overflow=egress["truncated"], settings=settings, fmt=download_format
+    )
+    if artifact is not None:
+        egress["artifact"] = artifact
     structured = {
         "status": "success",
         "dataverse": dv,

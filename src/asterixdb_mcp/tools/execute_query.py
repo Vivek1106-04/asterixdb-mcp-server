@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..artifacts import ArtifactFormat, overflow_artifact_payload
 from ..cc_client import CCClient
 from ..compiler_params import validate_compiler_parameters
 from ..config import Settings
@@ -43,6 +44,7 @@ async def run_execute_query(
     signature: bool = False,
     max_warnings: int = 5,
     user_tag: str | None = None,
+    download_format: ArtifactFormat | None = None,
 ) -> ToolResult:
     """Execute a read-only SQL++ query and return a windowed result envelope."""
     offset = max(offset, 0)
@@ -84,6 +86,18 @@ async def run_execute_query(
     window, truncation = bound_rows_for_llm(
         paged, max_rows, max_bytes, settings.max_field_chars
     )
+
+    # When the LLM did not see the whole result (rows beyond this page, or rows
+    # dropped by the context-window cap), persist the full set to a downloadable
+    # file and reference it instead of discarding the overflow.
+    artifact = overflow_artifact_payload(
+        rows,
+        overflow=more_available or truncation["truncated"],
+        settings=settings,
+        fmt=download_format,
+    )
+    if artifact is not None:
+        truncation["artifact"] = artifact
 
     structured: dict[str, Any] = {
         "status": "success",

@@ -29,25 +29,52 @@ from __future__ import annotations
 
 import hmac
 import logging
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .config import HEALTH_PATH, Settings
+from .artifacts import resolve_artifact_file
+from .config import ARTIFACTS_PATH_PREFIX, HEALTH_PATH, Settings
 
 logger = logging.getLogger(__name__)
 
 _BEARER_SCHEME = "bearer"
+# Media types served for each artifact extension on download.
+_ARTIFACT_MEDIA_TYPES = {".json": "application/json", ".txt": "text/plain; charset=utf-8"}
 
 
 async def health(_request: Request) -> JSONResponse:
     """Liveness probe: the process is up and serving. No cluster call, no version."""
     return JSONResponse({"status": "ok"})
+
+
+def make_artifact_handler(settings: Settings) -> Callable[[Request], Awaitable[Response]]:
+    """Build the download handler bound to the gateway settings."""
+
+    async def serve_artifact(request: Request) -> Response:
+        """Stream a saved overflow artifact as a file download, or 404.
+
+        The id is validated against the strict artifact shape and confined to the
+        artifacts directory in ``resolve_artifact_file``; an unknown or expired id
+        is indistinguishable from a missing file (a flat 404), which avoids leaking
+        whether a given id ever existed.
+        """
+        path = resolve_artifact_file(settings, request.path_params["artifact_id"])
+        if path is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return FileResponse(
+            path,
+            media_type=_ARTIFACT_MEDIA_TYPES.get(path.suffix, "application/octet-stream"),
+            filename=path.name,
+        )
+
+    return serve_artifact
 
 
 def is_authorized(authorization_header: str | None, api_key: str) -> bool:
@@ -107,6 +134,16 @@ def build_http_app(mcp: FastMCP, settings: Settings) -> Starlette:
     """
     app = mcp.streamable_http_app()
     app.router.routes.append(Route(HEALTH_PATH, health, methods=["GET"]))
+    # Overflow artifact downloads. Deliberately NOT exempt from auth below: the
+    # file holds the full result, so it sits behind the same credential as the
+    # MCP endpoint.
+    app.router.routes.append(
+        Route(
+            f"{ARTIFACTS_PATH_PREFIX}/{{artifact_id}}",
+            make_artifact_handler(settings),
+            methods=["GET"],
+        )
+    )
 
     if settings.auth_mode == "bearer":
         # api_key presence/length is guaranteed by validate_http_security.

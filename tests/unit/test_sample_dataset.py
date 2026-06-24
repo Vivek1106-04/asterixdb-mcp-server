@@ -28,6 +28,29 @@ def _handler(sample_rows: Any) -> object:
     return handler
 
 
+async def test_overflowing_sample_writes_artifact(settings: Settings, tmp_path: object) -> None:
+    settings = settings.model_copy(
+        update={"artifacts_dir": str(tmp_path), "max_rows_to_llm": 2}
+    )
+    rows = [{"i": n} for n in range(10)]
+    cap = make_capturing_cc(settings, handler=_handler(rows))
+
+    result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
+
+    artifact = result.structured["egress"]["artifact"]
+    assert artifact["totalRows"] == 10  # full sample saved, window was 2
+    assert result.structured["rowsReturned"] == 2
+
+
+async def test_small_sample_writes_no_artifact(settings: Settings, tmp_path: object) -> None:
+    settings = settings.model_copy(update={"artifacts_dir": str(tmp_path)})
+    cap = make_capturing_cc(settings, handler=_handler([{"i": 1}]))
+
+    result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
+
+    assert "artifact" not in result.structured["egress"]
+
+
 async def test_samples_real_rows(settings: Settings) -> None:
     cap = make_capturing_cc(settings, handler=_handler([{"business_id": "x", "state": "NV"}]))
     result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
