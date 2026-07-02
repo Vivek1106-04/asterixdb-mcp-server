@@ -410,16 +410,20 @@ async def test_check_index_usage_call() -> None:
 
 
 async def test_list_functions_call() -> None:
-    empty = {"status": "success", "results": []}
-    server = _server_with_mock(lambda r: httpx.Response(200, json=empty))
+    row = {"name": "count", "arity": -1, "category": "aggregate", "private": False}
+    live = {"status": "success", "results": [row]}
+    server = _server_with_mock(lambda r: httpx.Response(200, json=live))
     result = await server.call_tool("list_functions", {"language": "INTERNAL", "limit": 5})
     assert result.structuredContent["total"] > 0
 
 
 async def test_get_function_call_builtin() -> None:
-    server = _server_with_mock(lambda r: httpx.Response(200, json={"status": "success"}))
+    row = {"name": "count", "arity": -1, "category": "aggregate", "private": False, "aliases": []}
+    live = {"status": "success", "results": [row]}
+    server = _server_with_mock(lambda r: httpx.Response(200, json=live))
     result = await server.call_tool("get_function", {"name": "count"})
     assert result.structuredContent["scope"] == "builtin"
+    assert result.structuredContent["name"] == "count"
 
 
 async def test_search_metadata_call() -> None:

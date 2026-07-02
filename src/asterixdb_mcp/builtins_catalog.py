@@ -1,14 +1,11 @@
-"""Curated fallback catalog of common AsterixDB SQL++ built-in functions.
+"""Curated, documented subset of common AsterixDB SQL++ built-in functions.
 
-list_functions reads the full builtin set live from the engine's
-``function_metadata()`` datasource function. This curated, high-frequency subset is
-the fallback for clusters that predate that function (or when the query fails) and
-the source of one-line summaries for get_function — with the aggregates spelled out
-precisely so the model stops hallucinating ``STDEV``/``STDDEV`` (see statement_guard).
-
-Each entry is language INTERNAL. UDFs (SQL++, Java, Python) are read live from the
-Metadata catalog and merged in by list_functions/get_function; this static set is
-only the built-in half.
+Source of the ``builtin-functions`` reference topic (see resources/reference.py): a
+high-frequency subset with one-line summaries, aggregates spelled out precisely so
+the model stops hallucinating ``STDEV``/``STDDEV`` (see statement_guard). The full,
+authoritative builtin set is read live from the engine's ``function_metadata()``
+datasource function by list_functions/get_function; this static set carries only the
+human-written summaries the live source does not provide.
 """
 
 from __future__ import annotations
@@ -81,9 +78,6 @@ _BUILTINS: tuple[BuiltinFunction, ...] = (
     BuiltinFunction("to_string", "type", "Cast a value to string."),
     BuiltinFunction("to_number", "type", "Cast a value to number."),
 )
-
-BUILTINS_BY_NAME: dict[str, BuiltinFunction] = {fn.name: fn for fn in _BUILTINS}
-
 
 def all_builtins() -> tuple[BuiltinFunction, ...]:
     """Return the curated built-in functions."""
