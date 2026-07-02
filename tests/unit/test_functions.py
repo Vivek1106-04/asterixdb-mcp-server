@@ -7,7 +7,6 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from asterixdb_mcp.builtins_catalog import BUILTINS_BY_NAME, all_builtins
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.errors import ErrorType
 from asterixdb_mcp.tools.functions import run_get_function, run_list_functions
@@ -27,19 +26,12 @@ def _split_source_handler(builtins: list[dict] | None, udfs: list[dict] | None):
     return handler
 
 
-# builtins catalog
-
-
-def test_catalog_is_non_empty_and_indexed() -> None:
-    assert len(all_builtins()) > 0
-    assert BUILTINS_BY_NAME["stddev_samp"].category == "aggregate"
-
-
 # list_functions
 
 
 async def test_list_includes_builtins(settings: Settings) -> None:
-    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    builtins = [{"name": "stddev_samp", "arity": -1, "category": "aggregate", "private": False}]
+    cap = make_capturing_cc(settings, handler=_split_source_handler(builtins, []))
     result = await run_list_functions(cap.client, settings, name_contains="stddev")
     names = {f["name"] for f in result.structured["functions"]}
     assert "stddev_samp" in names
@@ -106,13 +98,6 @@ async def test_list_rejects_unknown_category(settings: Settings) -> None:
     assert cap.requests == []
 
 
-async def test_list_falls_back_to_curated_when_function_metadata_empty(settings: Settings) -> None:
-    # function_metadata() yields nothing (or predates the cluster) -> curated catalog.
-    cap = make_capturing_cc(settings, handler=_split_source_handler([], []))
-    result = await run_list_functions(cap.client, settings, name_contains="stddev")
-    assert "stddev_samp" in {f["name"] for f in result.structured["functions"]}
-
-
 async def test_list_rejects_unknown_language(settings: Settings) -> None:
     cap = make_capturing_cc(settings)
     result = await run_list_functions(cap.client, settings, language="COBOL")
@@ -121,20 +106,41 @@ async def test_list_rejects_unknown_language(settings: Settings) -> None:
 
 
 async def test_list_pagination(settings: Settings) -> None:
-    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    builtins = [
+        {"name": f"fn{i}", "arity": 0, "category": "scalar", "private": False} for i in range(5)
+    ]
+    cap = make_capturing_cc(settings, handler=_split_source_handler(builtins, []))
     result = await run_list_functions(cap.client, settings, language="INTERNAL", offset=0, limit=3)
     assert len(result.structured["functions"]) == 3
     assert result.structured["moreAvailable"] is True
 
 
 async def test_list_tolerates_udf_query_failure(settings: Settings) -> None:
+    # UDF hop fails; builtins (from function_metadata()) still list.
     def handler(req: httpx.Request) -> httpx.Response:
+        statement = parse_qs(req.content.decode())["statement"][0]
+        if "function_metadata()" in statement:
+            row = {"name": "sum", "arity": -1, "category": "aggregate", "private": False}
+            return json_response({"status": "success", "results": [row]})
         raise httpx.ConnectError("down")
 
     cap = make_capturing_cc(settings, handler=handler)
     result = await run_list_functions(cap.client, settings, language="INTERNAL")
-    # Builtins still returned despite the UDF query failing.
     assert result.structured["total"] > 0
+
+
+async def test_list_tolerates_builtin_query_failure(settings: Settings) -> None:
+    # function_metadata() hop fails; the builtin slice is dropped but UDFs still list.
+    def handler(req: httpx.Request) -> httpx.Response:
+        statement = parse_qs(req.content.decode())["statement"][0]
+        if "function_metadata()" in statement:
+            raise httpx.ConnectError("down")
+        row = {"Name": "my_udf", "Language": "SQLPP", "DataverseName": "S", "Arity": "1"}
+        return json_response({"status": "success", "results": [row]})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    result = await run_list_functions(cap.client, settings, name_contains="my_udf")
+    assert {f["name"] for f in result.structured["functions"]} == {"my_udf"}
 
 
 async def test_list_skips_malformed_udf_rows(settings: Settings) -> None:
@@ -163,11 +169,40 @@ async def test_list_normalizes_assorted_languages(settings: Settings) -> None:
 
 
 async def test_get_builtin(settings: Settings) -> None:
-    cap = make_capturing_cc(settings)
+    # A builtin resolves live from function_metadata() (case-insensitive on the name).
+    row = {"name": "stddev_samp", "arity": -1, "category": "aggregate", "private": False}
+    cap = make_capturing_cc(settings, handler=_split_source_handler([row], []))
     result = await run_get_function(cap.client, settings, name="STDDEV_SAMP")
     assert result.structured["scope"] == "builtin"
+    assert result.structured["name"] == "stddev_samp"
+    assert result.structured["category"] == "aggregate"
     assert result.structured["language"] == "INTERNAL"
-    assert cap.requests == []  # no CC call for a builtin
+    assert cap.requests  # resolved via a CC call to function_metadata()
+
+
+async def test_get_builtin_live_resolves_uncurated_function(settings: Settings) -> None:
+    # A builtin absent from the curated docs subset (e.g. a geo function) still
+    # resolves live instead of NOT_FOUNDing.
+    row = {"name": "st_distance_sphere", "arity": 2, "category": "scalar", "private": False}
+    cap = make_capturing_cc(settings, handler=_split_source_handler([row], []))
+    result = await run_get_function(cap.client, settings, name="ST_Distance_Sphere")
+    assert result.structured["scope"] == "builtin"
+    assert result.structured["name"] == "st_distance_sphere"
+    assert result.structured["category"] == "scalar"
+    assert result.structured["arity"] == 2
+
+
+async def test_get_builtin_live_cc_error_falls_through_to_udf(settings: Settings) -> None:
+    # The function_metadata() probe erroring must not mask the UDF lookup.
+    def handler(req: httpx.Request) -> httpx.Response:
+        statement = parse_qs(req.content.decode())["statement"][0]
+        if "function_metadata()" in statement:
+            raise httpx.ConnectError("down")
+        return json_response({"status": "success", "results": []})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    result = await run_get_function(cap.client, settings, name="maybe_builtin")
+    assert result.structured["errorType"] == ErrorType.NOT_FOUND.value
 
 
 async def test_get_empty_name_rejected(settings: Settings) -> None:

@@ -3,8 +3,8 @@
 Gives an LLM a unified view over two function sources so it stops guessing names:
 - built-ins read live from the ``function_metadata()`` datasource function, which
   enumerates every registered INTERNAL builtin with its arity and category and
-  excludes private (internal-only) functions; the curated builtins_catalog is the
-  fallback when the cluster predates that function,
+  excludes private (internal-only) functions — the single source of truth for both
+  list_functions and get_function,
 - user-defined functions read live from ``Metadata.Function`` (SQL++, Java, Python).
 
 Defense-in-Depth:
@@ -12,18 +12,17 @@ Defense-in-Depth:
   and the category filter a strict enum (window / aggregate / aggregate-scalar /
   unnest / datasource / scalar); the schema tells the model to use list_functions
   before referencing an unfamiliar function.
-- Layer 2: an unknown language or category is rejected before any CC call; the
-  builtin query falls back to the curated catalog on failure so the list is never
-  empty; get_function returns a self-correcting NOT_FOUND with near-name hints
-  rather than an empty body, and flags external (Java/Python) UDFs as code that
-  runs on the cluster.
+- Layer 2: an unknown language or category is rejected before any CC call;
+  get_function resolves a builtin live from function_metadata() so every registered
+  builtin is reachable, returns a self-correcting NOT_FOUND with near-name hints
+  rather than an empty body, and flags external (Java/Python) UDFs as code that runs
+  on the cluster.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..builtins_catalog import BUILTINS_BY_NAME, all_builtins
 from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
@@ -62,6 +61,14 @@ CATEGORIES = (
 # Live builtin source: every registered INTERNAL function, minus private ones.
 _BUILTIN_LIST_QUERY = (
     "SELECT VALUE f FROM function_metadata() f WHERE f.private = false ORDER BY f.name;"
+)
+
+# Single-builtin lookup: matches the canonical (underscored) name or any callable
+# alias so get_function resolves every registered builtin, not just the curated few.
+_BUILTIN_GET_QUERY = (
+    "SELECT VALUE f FROM function_metadata() f "
+    "WHERE f.private = false AND (lowercase(f.name) = $name OR array_contains(f.aliases, $name)) "
+    "LIMIT 1;"
 )
 
 _UDF_LIST_QUERY = "SELECT VALUE f FROM Metadata.`Function` f ORDER BY f.DataverseName, f.Name;"
@@ -138,17 +145,9 @@ async def run_get_function(
 
     # A built-in only resolves when no dataverse is given (UDFs are dataverse-scoped).
     if dataverse is None:
-        builtin = BUILTINS_BY_NAME.get(clean.lower())
-        if builtin is not None:
-            structured = {
-                "status": "success",
-                "scope": "builtin",
-                "name": builtin.name,
-                "language": LANGUAGE_INTERNAL,
-                "category": builtin.category,
-                "summary": builtin.summary,
-            }
-            return ToolResult(text=f"{builtin.name} — {builtin.summary}", structured=structured)
+        live = await _get_builtin_live(client, settings, clean.lower())
+        if live is not None:
+            return live
 
     return await _get_udf(client, settings, clean, dataverse, user_tag)
 
@@ -190,18 +189,50 @@ async def _get_udf(
     return ToolResult(text=text, structured={"status": "success", "scope": "udf", **record})
 
 
+async def _get_builtin_live(client: CCClient, settings: Settings, name: str) -> ToolResult | None:
+    """Resolve one builtin live from ``function_metadata()``.
+
+    The live datasource enumerates every registered builtin — geo, temporal, and the
+    rest — matched here by canonical name or callable alias, so a valid builtin never
+    NOT_FOUNDs. ``name`` is already lower-cased. Returns None when the name is not a
+    live builtin (caller then tries a UDF) or when the CC hop fails.
+    """
+    ccid = make_client_context_id(settings.agent_session_id, "get_function_builtin")
+    try:
+        envelope = await client.execute(
+            _BUILTIN_GET_QUERY, client_context_id=ccid, statement_parameters={"name": name}
+        )
+    except GatewayError:
+        return None
+    rows = envelope.get("results") or []
+    if not rows:
+        return None
+    row = rows[0]
+    live_name = row.get("name", name)
+    structured: dict[str, Any] = {
+        "status": "success",
+        "scope": "builtin",
+        "name": live_name,
+        "language": LANGUAGE_INTERNAL,
+        "category": row.get("category"),
+        "arity": row.get("arity"),
+    }
+    text = f"{live_name} — built-in {row.get('category')} function."
+    return ToolResult(text=text, structured=structured)
+
+
 async def _builtin_records(client: CCClient, settings: Settings) -> list[dict[str, Any]]:
-    """Read builtins live from function_metadata(); fall back to the curated catalog.
+    """Read builtins live from function_metadata().
 
     The live source enumerates every registered INTERNAL function with arity and
-    category. If the cluster predates function_metadata() (the query errors) or it
-    yields nothing, the curated catalog keeps the list non-empty.
+    category. On a CC error the builtin slice is dropped (like the UDF slice) rather
+    than crashing the whole listing.
     """
     ccid = make_client_context_id(settings.agent_session_id, "list_functions_builtins")
     try:
         envelope = await client.execute(_BUILTIN_LIST_QUERY, client_context_id=ccid)
     except GatewayError:
-        return _curated_builtin_records()
+        return []
     records: list[dict[str, Any]] = []
     for row in envelope.get("results") or []:
         if not isinstance(row, dict) or not isinstance(row.get("name"), str):
@@ -215,19 +246,7 @@ async def _builtin_records(client: CCClient, settings: Settings) -> list[dict[st
                 "arity": row.get("arity"),
             }
         )
-    return records or _curated_builtin_records()
-
-
-def _curated_builtin_records() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": fn.name,
-            "language": LANGUAGE_INTERNAL,
-            "dataverse": None,
-            "category": fn.category,
-        }
-        for fn in all_builtins()
-    ]
+    return records
 
 
 async def _udf_records(client: CCClient, settings: Settings) -> list[dict[str, Any]]:
