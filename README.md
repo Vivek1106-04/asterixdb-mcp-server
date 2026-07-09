@@ -79,7 +79,12 @@ the engine's `okf_catalog()` built-in and reconciles the emitted OKF concept
 docs into `Dashboard.Memory` bi-temporally (changed facts are superseded, never
 deleted). The gateway itself stays read-only; the refresh script is the write
 path and talks to the CC query service directly. Requires a cluster whose
-engine ships `okf_catalog()`.
+engine ships `okf_catalog()`. With `--ground` the refresh also executes each
+doc's profiling queries (real row counts) and runs the native `ADVISE` advisor
+over observed workload, folding results into the docs before reconcile.
+`scripts/okf_bundle.py` round-trips the store as a portable OKF bundle:
+one markdown file per concept, per-dataverse `index.md`, and `log.md`
+synthesized from the bi-temporal supersede chain.
 
 ### Resources
 
@@ -275,7 +280,9 @@ src/asterixdb_mcp/
   resources/         # live cluster resources + SQL++ reference docs
   prompts/           # guided multi-step workflows
 scripts/
-  okf_refresh.py     # write path: materialize okf_catalog() into Dashboard.Memory (bi-temporal)
+  okf_refresh.py     # write path: materialize okf_catalog() into Dashboard.Memory (bi-temporal);
+                     #   --ground executes each doc's profiling queries + native ADVISE
+  okf_bundle.py      # export/import the store as an OKF bundle (index.md, log.md, concepts)
 tests/
   unit/              # per-module unit tests
   contract/          # advertised MCP surface
