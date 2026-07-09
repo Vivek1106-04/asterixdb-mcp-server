@@ -63,6 +63,7 @@ a failed call to be rejected.
 | Discover | `sample_dataset` | A small bounded row sample from a dataset. |
 | Discover | `search_metadata` | Cross-metadata search for datasets/types/indexes/functions. |
 | Discover | `get_dataset_statistics` | Sampled row-count/size estimate and ANALYZE freshness for a dataset. |
+| Memory | `memory_search` | OKF concept docs (schema, stats, proven queries) by subject key, full text, and link hop. |
 | Functions | `list_functions` | Built-in / user-defined functions, filtered by language. |
 | Functions | `get_function` | One function's signature, with near-name hints on a miss. |
 | Cluster | `get_cluster_status` | Live cluster state and node roster. |
@@ -71,6 +72,14 @@ a failed call to be rejected.
 | Health | `database_health_check` | Metadata scan for duplicate/redundant indexes and ROW-vs-COLUMNAR candidates. |
 | Health | `get_query_history` | Recent session queries with outcome and classified error, for self-debugging. |
 | Docs | `get_reference` | SQL++ reference docs by topic. |
+
+
+The `memory_search` store is populated by `scripts/okf_refresh.py`, which walks
+the engine's `okf_catalog()` built-in and reconciles the emitted OKF concept
+docs into `Dashboard.Memory` bi-temporally (changed facts are superseded, never
+deleted). The gateway itself stays read-only; the refresh script is the write
+path and talks to the CC query service directly. Requires a cluster whose
+engine ships `okf_catalog()`.
 
 ### Resources
 
@@ -265,6 +274,8 @@ src/asterixdb_mcp/
   tools/             # one module per tool (SDK-agnostic cores)
   resources/         # live cluster resources + SQL++ reference docs
   prompts/           # guided multi-step workflows
+scripts/
+  okf_refresh.py     # write path: materialize okf_catalog() into Dashboard.Memory (bi-temporal)
 tests/
   unit/              # per-module unit tests
   contract/          # advertised MCP surface
