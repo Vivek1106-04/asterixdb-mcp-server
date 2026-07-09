@@ -46,6 +46,7 @@ _LIVE_READ_ONLY = {
     "list_functions": "List SQL++ Functions",
     "get_function": "Get Function Details",
     "search_metadata": "Search Metadata Catalog",
+    "memory_search": "Search Agent Memory",
     "get_cluster_status": "Get Cluster Status",
     "get_node_details": "Get Node Details",
     "database_health_check": "Database Health Check",

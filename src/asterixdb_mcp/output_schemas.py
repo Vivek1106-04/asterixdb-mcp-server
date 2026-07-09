@@ -261,6 +261,17 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         required=("name",),
         description="One function's signature and details (built-in summary or UDF body).",
     ),
+    "memory_search": _obj(
+        {
+            "status": _STRING,
+            "query": _STRING,
+            "subject": _STRING,
+            "limit": _INT,
+            "matches": _array_of_objects(),
+        },
+        required=("matches",),
+        description="Current OKF memory concepts matched by subject key, full text, and link hop.",
+    ),
     "search_metadata": _obj(
         {
             "status": _STRING,

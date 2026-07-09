@@ -86,6 +86,7 @@ from .tools.query_history import record_query, run_get_query_history
 from .tools.recommend_indexes import run_recommend_indexes
 from .tools.running_queries import run_list_running_queries
 from .tools.sample_dataset import run_sample_dataset
+from .tools.memory_search import run_memory_search
 from .tools.search_metadata import run_search_metadata
 
 EXECUTE_QUERY_DESCRIPTION = (
@@ -251,6 +252,21 @@ GET_FUNCTION_DESCRIPTION = (
     "(give its `dataverse`) returns its signature, return type, and body. External Java/Python "
     "UDFs are flagged because their body runs code on the cluster. Returns NOT_FOUND with "
     "guidance if the name is unknown — call list_functions to discover exact names."
+)
+
+MEMORY_SEARCH_DESCRIPTION = (
+    "Search the agentic-memory store of OKF (Open Knowledge Format) concept documents: "
+    "distilled knowledge about datasets (schema, indexes, statistics, proven query patterns) "
+    "and prior facts, retrieved WITHOUT re-deriving them from the catalog or data.\n\n"
+    "Retrieval blends three paths in priority order: (1) exact `subject` key when you know "
+    "the concept identity (e.g. 'MyDataverse.MyDataset'), (2) full-text over the concept "
+    "bodies for free-text questions, (3) a one-hop expansion across concept links (a "
+    "dataset's datatype, its indexes). Only current facts are returned; superseded history "
+    "is excluded.\n\n"
+    "USE THIS FIRST when asked about a dataset you have not inspected in this session: a hit "
+    "gives you schema + working queries in one call, cheaper than get_schema + samples. If "
+    "it returns no matches the store may not be materialized; fall back to get_schema / "
+    "describe_dataverse."
 )
 
 SEARCH_METADATA_DESCRIPTION = (
@@ -822,6 +838,29 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         ] = None,
     ) -> types.CallToolResult:
         result = await run_get_function(_client(), settings, name=name, dataverse=dataverse)
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="memory_search",
+        description=MEMORY_SEARCH_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["memory_search"],
+    )
+    async def memory_search(
+        query: Annotated[str, Field(description="Free-text question or keywords to match against concept bodies.")] = "",
+        subject: Annotated[str | None, Field(description="Exact concept identity, e.g. 'MyDataverse.MyDataset'.")] = None,
+        dataverse: Annotated[str | None, Field(description="Restrict matches to concepts of one dataverse.")] = None,
+        limit: Annotated[int, Field(ge=1, le=50, description="Max concepts before link expansion.")] = 8,
+        follow_links: Annotated[bool, Field(description="Also pull concepts one link-hop from each hit.")] = True,
+    ) -> types.CallToolResult:
+        result = await run_memory_search(
+            _client(),
+            settings,
+            query=query,
+            subject=subject,
+            dataverse=dataverse,
+            limit=limit,
+            follow_links=follow_links,
+        )
         return _to_call_tool_result(result)
 
     @mcp.tool(

@@ -720,3 +720,21 @@ def test_main_builds_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FastMCP, "run", lambda self, *a, **k: ran.setdefault("ran", True))
     server_module.main()
     assert ran["ran"] is True
+
+
+async def test_memory_search_call() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(req.content.decode()).get("statement", [""])[0]
+        if "ftcontains" in stmt:
+            row = {
+                "subject": "shop.orders",
+                "type": "AsterixDB Dataset",
+                "text": "orders schema",
+                "links": [],
+            }
+            return httpx.Response(200, json={"status": "success", "results": [row]})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool("memory_search", {"query": "orders"})
+    assert result.structuredContent["matches"][0]["subject"] == "shop.orders"
