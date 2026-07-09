@@ -21,6 +21,7 @@ EXPECTED_TOOLS = {
     "check_index_usage",
     "list_functions",
     "get_function",
+    "memory_search",
     "search_metadata",
     "get_cluster_status",
     "get_node_details",
