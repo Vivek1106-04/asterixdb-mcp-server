@@ -46,6 +46,16 @@ HYRACKS_JOB_FORMAT_JSON = "json"
 _SUCCESS_STATUSES = frozenset({"success"})
 
 
+# Transport failures that signal a dead pooled connection (typically after a CC
+# restart). Read-only statements make one retry safe and idempotent.
+_STALE_CONNECTION_ERRORS = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
+
+
 class CCClient:
     """Async wrapper over the AsterixDB CC REST endpoints used by the gateway tools."""
 
@@ -286,13 +296,24 @@ class CCClient:
         return form
 
     async def _post_query(self, form: dict[str, str]) -> dict[str, Any]:
-        """POST the form to ``/query/service``, enforce the byte ceiling, parse JSON."""
+        """POST the form to ``/query/service``, enforce the byte ceiling, parse JSON.
+
+        A long-lived gateway can hold pooled keep-alive connections that die when
+        the CC restarts; the first request after a restart then fails on the dead
+        socket. Since the gateway only issues read-only statements, one retry on
+        such transport-level failures is safe and idempotent.
+        """
         try:
-            response = await self._http.post(
-                QUERY_SERVICE_PATH,
-                data=form,
-                headers=self._headers(),
-            )
+            response = await self._post_query_once(form)
+        except _STALE_CONNECTION_ERRORS:
+            try:
+                response = await self._post_query_once(form)
+            except httpx.HTTPError as exc:
+                raise GatewayError(
+                    ErrorType.INTERNAL,
+                    f"Connection to AsterixDB at {self._settings.cc_base_url} was reset "
+                    f"and could not be re-established (the cluster may be restarting): {exc}",
+                ) from exc
         except httpx.TimeoutException as exc:
             raise GatewayError(
                 ErrorType.TIMEOUT,
@@ -306,6 +327,13 @@ class CCClient:
 
         body = enforce_byte_ceiling(response.content, self._settings.max_bytes_per_query)
         return _parse_json_body(body)
+
+    async def _post_query_once(self, form: dict[str, str]) -> httpx.Response:
+        return await self._http.post(
+            QUERY_SERVICE_PATH,
+            data=form,
+            headers=self._headers(),
+        )
 
     @classmethod
     def _raise_on_envelope_error(cls, envelope: dict[str, Any]) -> None:

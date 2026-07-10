@@ -402,6 +402,12 @@ class _ClientHolder:
                 httpx.AsyncClient(
                     base_url=self.settings.cc_base_url,
                     timeout=self.settings.request_timeout_s,
+                    # The gateway is long-lived while the CC may restart under it.
+                    # Retry connection establishment and expire idle keep-alive
+                    # connections quickly so a CC restart doesn't leave the pool
+                    # full of dead sockets that fail the next tool call.
+                    transport=httpx.AsyncHTTPTransport(retries=2),
+                    limits=httpx.Limits(keepalive_expiry=10.0),
                 ),
             )
         return self.client
