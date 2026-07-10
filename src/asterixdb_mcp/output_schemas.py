@@ -114,7 +114,10 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
             "limit": _INT,
             "moreAvailable": _BOOL,
             "datasets": _array_of_objects(),
-            "nameCollisions": {"type": "array"},
+            # a COUNT of names spanning multiple dataverses, not a list: clients
+            # (Claude Desktop) validate structuredContent against this schema and
+            # reject the whole tool result on a type mismatch
+            "nameCollisions": _INT,
         },
         required=("datasets",),
         description="Paginated dataset summaries, optionally scoped to one dataverse.",
@@ -265,7 +268,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         {
             "status": _STRING,
             "query": _STRING,
-            "subject": _STRING,
+            "subject": {"type": ["string", "null"]},
             "limit": _INT,
             "matches": _array_of_objects(),
         },
@@ -286,7 +289,8 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
     "get_cluster_status": _obj(
         {
             "status": _STRING,
-            "version": _STRING,
+            # null when /admin/version omits a recognizable version field
+            "version": {"type": ["string", "null"]},
             "state": _STRING,
             "nodeCount": _INT,
             "nodes": _array_of_objects(),

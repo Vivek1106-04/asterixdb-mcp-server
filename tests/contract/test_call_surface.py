@@ -738,3 +738,29 @@ async def test_memory_search_call() -> None:
     server = _server_with_mock(handler)
     result = await server.call_tool("memory_search", {"query": "orders"})
     assert result.structuredContent["matches"][0]["subject"] == "shop.orders"
+
+
+async def test_structured_results_validate_against_advertised_schemas() -> None:
+    """Clients (e.g. Claude Desktop) validate structuredContent against the
+    advertised outputSchema and reject the whole tool result on any mismatch —
+    a wrong declared type bricks the tool even though the gateway returns 200.
+    """
+    import jsonschema
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(req.content.decode()).get("statement", [""])[0]
+        if "Metadata.`Dataset`" in stmt:
+            row = {"DataverseName": "S", "DatasetName": "orders", "DatatypeName": "T"}
+            return httpx.Response(200, json={"status": "success", "results": [row]})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    server = _server_with_mock(handler)
+    tools = {t.name: t for t in await server.list_tools()}
+    for name, args in (
+        ("list_datasets", {"dataverse": "S"}),
+        ("memory_search", {"query": "orders"}),
+        ("search_metadata", {"query": "orders"}),
+    ):
+        result = await server.call_tool(name, args)
+        assert not result.isError
+        jsonschema.validate(result.structuredContent, tools[name].outputSchema)
