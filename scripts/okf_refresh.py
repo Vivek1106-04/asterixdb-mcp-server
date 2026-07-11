@@ -37,6 +37,11 @@ from typing import Any
 KIND = "semantic"
 # the store itself must not be part of the knowledge it stores
 SELF_DATAVERSE = "Dashboard"
+# stamped on every statement the pipeline itself runs so the walk's workload
+# mining never echoes pipeline plumbing back into the concept docs
+PIPELINE_MARKER = "/*okf*/"
+DATASET_CONCEPT_TYPES = ("AsterixDB Dataset", "AsterixDB External Dataset", "AsterixDB View")
+MAX_ADVISED_STATEMENTS = 3
 
 BOOTSTRAP_STATEMENTS = (
     "CREATE DATAVERSE Dashboard IF NOT EXISTS;",
@@ -131,21 +136,103 @@ def apply(cc: str, inserts: list[dict[str, Any]], supersede: list[dict[str, Any]
         execute(cc, f"INSERT INTO Dashboard.Memory ({json.dumps(inserts)});")
 
 
+def ground(cc: str, bundle: dict[str, dict[str, Any]]) -> int:
+    """Self-grounding pass: execute each dataset doc's profiling queries and fold
+    the actual values into the doc before reconcile.
+
+    Sections contain only values (no timestamps), so an unchanged database
+    yields byte-identical docs and the refresh stays idempotent. Every statement
+    is stamped with PIPELINE_MARKER so workload mining ignores it.
+    """
+    grounded = 0
+    for doc in bundle.values():
+        if doc.get("type") not in DATASET_CONCEPT_TYPES:
+            continue
+        sections: list[str] = []
+        row_count = _grounded_rowcount(cc, doc)
+        if row_count is not None:
+            sections.append(f"- Row count (grounded): {row_count}")
+            doc["grounded_rowcount"] = row_count
+        advice = _grounded_advice(cc, doc)
+        if advice:
+            doc["recommended_indexes"] = advice
+        if sections:
+            doc["text"] += "\n# Grounded statistics\n\n" + "\n".join(sections) + "\n"
+        if advice:
+            doc["text"] += (
+                "\n# Index advice\n\nFrom the native ADVISE advisor over observed queries:\n\n"
+                + "".join(f"- `{ddl}`\n" for ddl in advice)
+            )
+        if sections or advice:
+            grounded += 1
+    return grounded
+
+
+def _grounded_rowcount(cc: str, doc: dict[str, Any]) -> int | None:
+    count_query = next(iter(doc.get("profile_queries") or []), None)
+    if not count_query:
+        return None
+    try:
+        results = execute(cc, f"{PIPELINE_MARKER} {count_query}").get("results", [])
+    except RuntimeError:
+        return None  # grounding is best-effort; the walk doc still lands
+    if results and isinstance(results[0], dict) and isinstance(results[0].get("cnt"), int):
+        return results[0]["cnt"]
+    return None
+
+
+def _grounded_advice(cc: str, doc: dict[str, Any]) -> list[str]:
+    """Run the native ADVISE advisor over the doc's observed SELECT statements."""
+    recommended: set[str] = set()
+    statements = [
+        s for s in (doc.get("observed_queries") or []) if s.lstrip().lower().startswith(("select", "with", "from"))
+    ]
+    for statement in statements[:MAX_ADVISED_STATEMENTS]:
+        try:
+            results = execute(cc, f"{PIPELINE_MARKER} ADVISE {statement}").get("results", [])
+        except RuntimeError:
+            continue  # cluster without ADVISE, or a non-advisable statement
+        _collect_recommended(results, recommended, under_recommended=False)
+    return sorted(recommended)
+
+
+def _collect_recommended(node: Any, out: set[str], *, under_recommended: bool) -> None:
+    """Walk an ADVISE result for index_statement strings under recommended_indexes."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "index_statement" and under_recommended and isinstance(value, str):
+                out.add(value.strip())
+            else:
+                _collect_recommended(
+                    value, out, under_recommended=under_recommended or "recommended" in key
+                )
+    elif isinstance(node, list):
+        for item in node:
+            _collect_recommended(item, out, under_recommended=under_recommended)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cc", default="http://localhost:19002", help="CC base URL")
     parser.add_argument("--dataverse", default=None, help="Refresh only this dataverse")
+    parser.add_argument(
+        "--ground",
+        action="store_true",
+        help="Execute each doc's profiling queries and ADVISE, folding results in",
+    )
     options = parser.parse_args()
 
     bootstrap(options.cc)
     bundle = fetch_bundle(options.cc, options.dataverse)
+    grounded = ground(options.cc, bundle) if options.ground else 0
     current = fetch_current(options.cc)
     now = datetime.now(timezone.utc).isoformat()
     inserts, supersede, unchanged = reconcile(bundle, current, now, options.dataverse)
     apply(options.cc, inserts, supersede)
     print(
         f"okf_refresh: {len(bundle)} concepts walked | "
-        f"{len(inserts)} inserted | {len(supersede)} superseded | {unchanged} unchanged"
+        f"{len(inserts)} inserted | {len(supersede)} superseded | {unchanged} unchanged | "
+        f"{grounded} grounded"
     )
     return 0
 
