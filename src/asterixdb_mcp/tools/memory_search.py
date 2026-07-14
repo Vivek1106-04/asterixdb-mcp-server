@@ -9,8 +9,9 @@ priority order:
 1. **Subject key** — exact ``subject`` match (the concept's stable identity,
    e.g. ``SalesDV.orders``): the precise path.
 2. **Full text** — ``ftcontains`` over the concept body for lexical recall.
-3. **Link graph** — one hop across ``links`` from every hit, pulling in
-   directly related concepts (a dataset's datatype, its indexes, ...).
+3. **Link graph** — up to ``link_depth`` hops across ``links`` from every hit,
+   pulling in related concepts (a dataset's datatype, its indexes, and at
+   depth 2 their neighbours in turn) for connected, multi-hop context.
 
 Only *current* facts are returned (bi-temporal rows whose ``valid_to`` is
 unset); superseded history stays out of context.
@@ -38,6 +39,7 @@ from . import ToolResult
 DEFAULT_LIMIT = 8
 MAX_LIMIT = 50
 MAX_QUERY_LEN = 500
+MAX_LINK_DEPTH = 2
 # fetch window for the full-text pass before client-side ranking
 FT_FETCH_WINDOW = 100
 
@@ -52,11 +54,11 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 _CURRENT = "m.valid_to IS UNKNOWN"
 
 _SUBJECT_QUERY = (
-    f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = \"__SUBJECT__\" AND {_CURRENT};"
+    f'SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = "__SUBJECT__" AND {_CURRENT};'
 )
 _FULLTEXT_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m "
-    f"WHERE ftcontains(m.`text`, [__TOKENS__], {{\"mode\": \"any\"}}) AND {_CURRENT} "
+    f'WHERE ftcontains(m.`text`, [__TOKENS__], {{"mode": "any"}}) AND {_CURRENT} '
     f"LIMIT {FT_FETCH_WINDOW};"
 )
 _LINKS_QUERY = (
@@ -75,8 +77,9 @@ async def run_memory_search(
     dataverse: str | None = None,
     limit: int = DEFAULT_LIMIT,
     follow_links: bool = True,
+    link_depth: int = 1,
 ) -> ToolResult:
-    """Retrieve current OKF concept docs by subject key, full text, and link hop."""
+    """Retrieve current OKF concept docs by subject key, full text, and link hops."""
     needle = query.strip()
     if not needle and not subject:
         return ToolResult.error(
@@ -125,11 +128,18 @@ async def run_memory_search(
     matches = matches[:limit]
 
     if follow_links and matches:
-        linked = _link_targets(matches, seen)
-        if linked:
+        link_depth = min(max(link_depth, 1), MAX_LINK_DEPTH)
+        frontier = matches
+        for hop in range(1, link_depth + 1):
+            linked = _link_targets(frontier, seen)
+            if not linked:
+                break
             subject_list = ", ".join(f'"{s}"' for s in linked)
-            for doc in await _fetch(client, ccid, _LINKS_QUERY.replace("__SUBJECTS__", subject_list)):
-                _add(matches, seen, doc, via="link")
+            docs = await _fetch(client, ccid, _LINKS_QUERY.replace("__SUBJECTS__", subject_list))
+            frontier = []
+            for doc in docs:
+                if _add(matches, seen, doc, via="link" if hop == 1 else f"link-{hop}"):
+                    frontier.append(matches[-1])
 
     structured = {
         "status": "success",
@@ -162,14 +172,15 @@ async def _fetch(client: CCClient, ccid: str, statement: str) -> list[dict[str, 
     return [row for row in envelope.get("results", []) if isinstance(row, dict)]
 
 
-def _add(matches: list[dict[str, Any]], seen: set[str], doc: dict[str, Any], *, via: str) -> None:
+def _add(matches: list[dict[str, Any]], seen: set[str], doc: dict[str, Any], *, via: str) -> bool:
     subj = str(doc.get("subject", ""))
     if not subj or subj in seen:
-        return
+        return False
     seen.add(subj)
     projected: dict[str, Any] = {k: doc[k] for k in _DOC_FIELDS if k in doc}
     projected["via"] = via
     matches.append(projected)
+    return True
 
 
 def _score(doc: dict[str, Any], tokens: list[str]) -> int:

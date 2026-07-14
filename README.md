@@ -82,9 +82,16 @@ path and talks to the CC query service directly. Requires a cluster whose
 engine ships `okf_catalog()`. With `--ground` the refresh also executes each
 doc's profiling queries (real row counts) and runs the native `ADVISE` advisor
 over observed workload, folding results into the docs before reconcile.
+With `--revalidate` it re-runs the stored `source_query` fingerprints of
+learned memories and supersedes rows whose live results drifted (tool-wins).
 `scripts/okf_bundle.py` round-trips the store as a portable OKF bundle:
 one markdown file per concept, per-dataverse `index.md`, and `log.md`
 synthesized from the bi-temporal supersede chain.
+`scripts/okf_consolidate.py` is the sleep-time pass: it deduplicates current
+rows, decays each learned memory's `trust` by usage-modulated half-life, and
+supersedes rows that fall below the trust floor (forgetting, with history
+retained). `memory_search` accepts `link_depth` (1–2) to pull multi-hop
+connected context along the concept link graph.
 
 ### Resources
 
@@ -283,6 +290,7 @@ scripts/
   okf_refresh.py     # write path: materialize okf_catalog() into Dashboard.Memory (bi-temporal);
                      #   --ground executes each doc's profiling queries + native ADVISE
   okf_bundle.py      # export/import the store as an OKF bundle (index.md, log.md, concepts)
+  okf_consolidate.py # sleep-time pass: dedup, trust decay, forgetting (supersede below floor)
 tests/
   unit/              # per-module unit tests
   contract/          # advertised MCP surface

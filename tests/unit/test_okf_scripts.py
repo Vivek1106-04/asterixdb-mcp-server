@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import okf_bundle  # noqa: E402
+import okf_consolidate  # noqa: E402
 import okf_refresh  # noqa: E402
 
 
@@ -269,3 +273,56 @@ def test_revalidate_matching_digest_and_failed_query_leave_row_alone(monkeypatch
     }
     supersede, stamp, checked = okf_refresh.revalidate("cc", current, "t1")
     assert (supersede, stamp, checked) == ([], [], 2)
+
+
+NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+
+
+def _learned(subject: str, **extra) -> dict:
+    return {"subject": subject, "type": "Note", "id": f"{subject}@t0", "valid_from": "t0", **extra}
+
+
+def test_dedup_keeps_newest_current_row_per_subject() -> None:
+    rows = [
+        {"subject": "a", "id": "a@t0", "valid_from": "2026-01-01"},
+        {"subject": "a", "id": "a@t1", "valid_from": "2026-06-01"},
+        {"subject": "b", "id": "b@t0", "valid_from": "2026-01-01"},
+    ]
+    kept, supersede = okf_consolidate.dedup(rows, "t2")
+    assert {row["id"] for row in kept} == {"a@t1", "b@t0"}
+    assert supersede[0]["id"] == "a@t0"
+    assert supersede[0]["superseded_by"] == "consolidation-dedup"
+
+
+def test_decayed_trust_halves_after_one_half_life() -> None:
+    row = _learned("a", last_used="2026-06-14T00:00:00+00:00")  # 30 idle days
+    assert okf_consolidate.decayed_trust(row, NOW, half_life_days=30.0) == pytest.approx(0.5)
+
+
+def test_decayed_trust_access_count_stretches_half_life() -> None:
+    row = _learned("a", last_used="2026-06-14T00:00:00+00:00", access_count=2)
+    assert okf_consolidate.decayed_trust(row, NOW, 30.0) == pytest.approx(0.5 ** (1 / 2))
+
+
+def test_decayed_trust_falls_back_to_valid_from_then_now() -> None:
+    dated = _learned("a")
+    dated["valid_from"] = "2026-06-14T00:00:00+00:00"
+    assert okf_consolidate.decayed_trust(dated, NOW, 30.0) == pytest.approx(0.5)
+    undated = {"subject": "a", "valid_from": "not-a-date"}
+    assert okf_consolidate.decayed_trust(undated, NOW, 30.0) == pytest.approx(1.0)
+
+
+def test_consolidate_updates_prunes_and_exempts() -> None:
+    walk_owned = {"subject": "dv.ds", "type": "AsterixDB Dataset", "id": "w", "valid_from": "t0"}
+    fresh = _learned("fresh", last_used=NOW.isoformat(), trust=1.0)
+    fading = _learned("fading", last_used="2026-06-14T00:00:00+00:00")
+    forgotten = _learned("forgotten", last_used="2025-07-14T00:00:00+00:00")
+    updates, supersede, exempt = okf_consolidate.consolidate(
+        [walk_owned, fresh, fading, forgotten], NOW, half_life_days=30.0, trust_floor=0.2
+    )
+    assert exempt == 1
+    assert [row["subject"] for row in updates] == ["fading"]
+    assert updates[0]["trust"] == pytest.approx(0.5)
+    assert [row["subject"] for row in supersede] == ["forgotten"]
+    assert supersede[0]["superseded_by"] == "consolidation-decay"
+    assert supersede[0]["valid_to"] == NOW.isoformat()

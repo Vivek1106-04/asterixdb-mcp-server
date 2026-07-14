@@ -115,6 +115,53 @@ async def test_link_expansion_one_hop(settings: Settings) -> None:
     assert by_subject["shop/type/OrderT"]["via"] == "link"
 
 
+async def test_link_expansion_two_hops(settings: Settings) -> None:
+    store = {
+        "shop.orders": _doc("shop.orders", "orders schema", links=["shop/type/OrderT"]),
+        "shop/type/OrderT": _doc("shop/type/OrderT", "the datatype", links=["shop.customers"]),
+        "shop.customers": _doc("shop.customers", "linked dataset"),
+    }
+    cap = make_capturing_cc(settings, handler=_store_handler(store))
+    one_hop = await run_memory_search(cap.client, settings, query="orders")
+    assert "shop.customers" not in {m["subject"] for m in one_hop.structured["matches"]}
+
+    two_hop = await run_memory_search(cap.client, settings, query="orders", link_depth=2)
+    by_subject = {m["subject"]: m for m in two_hop.structured["matches"]}
+    assert by_subject["shop/type/OrderT"]["via"] == "link"
+    assert by_subject["shop.customers"]["via"] == "link-2"
+
+
+async def test_link_depth_clamped_and_cycles_terminate(settings: Settings) -> None:
+    store = {
+        "shop.orders": _doc("shop.orders", "orders schema", links=["shop/type/OrderT"]),
+        "shop/type/OrderT": _doc("shop/type/OrderT", "the datatype", links=["shop.orders"]),
+    }
+    cap = make_capturing_cc(settings, handler=_store_handler(store))
+    result = await run_memory_search(cap.client, settings, query="orders", link_depth=99)
+    subjects = [m["subject"] for m in result.structured["matches"]]
+    assert subjects == ["shop.orders", "shop/type/OrderT"]
+
+
+async def test_link_expansion_skips_docs_already_seen(settings: Settings) -> None:
+    orders = _doc("shop.orders", "orders schema", links=["shop/type/OrderT"])
+    order_type = _doc("shop/type/OrderT", "the datatype")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        stmt = _statement_of(req)
+        if "m.subject IN [" in stmt:  # the link pass echoes an already-seen doc back
+            rows = [order_type, orders]
+        elif "ftcontains" in stmt:
+            rows = [orders]
+        else:
+            rows = []
+        return httpx.Response(200, json={"status": "success", "results": rows})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    result = await run_memory_search(cap.client, settings, query="orders")
+    subjects = [m["subject"] for m in result.structured["matches"]]
+    assert subjects == ["shop.orders", "shop/type/OrderT"]
+
+
 async def test_follow_links_false_skips_expansion(settings: Settings) -> None:
     store = {
         "shop.orders": _doc("shop.orders", "orders schema", links=["shop/type/OrderT"]),
@@ -182,4 +229,4 @@ async def test_malformed_link_targets_not_followed(settings: Settings) -> None:
     subjects = {m["subject"] for m in result.structured["matches"]}
     assert subjects == {"shop.orders", "shop/type/OrderT"}
     links_stmts = [s for s in map(_statement_of, cap.requests) if "IN [" in s]
-    assert links_stmts and 'DROP' not in links_stmts[0]
+    assert links_stmts and "DROP" not in links_stmts[0]
