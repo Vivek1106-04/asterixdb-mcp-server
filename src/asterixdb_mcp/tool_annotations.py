@@ -93,6 +93,18 @@ TOOL_ANNOTATIONS["cancel_query"] = ToolAnnotations(
     openWorldHint=True,
 )
 
+# memory_write persists agent-curated notes into the Dashboard.Memory store —
+# the one write surface, gated by settings and scoped to that store in the CC
+# client. It supersedes rather than deletes, and re-writing the same note is a
+# no-op, so it is non-destructive and idempotent.
+TOOL_ANNOTATIONS["memory_write"] = ToolAnnotations(
+    title="Write Agent Memory",
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+
 # get_reference reads static documentation bundled in the gateway; it never
 # reaches the cluster, so it is a closed-world read.
 TOOL_ANNOTATIONS["get_reference"] = ToolAnnotations(

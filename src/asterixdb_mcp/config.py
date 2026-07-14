@@ -85,6 +85,14 @@ class Settings(BaseSettings):
         "segment of the namespaced clientContextID ({agentSessionId}::{userTag}::{uuid}).",
     )
 
+    # Agentic-memory store
+    memory_write_enabled: bool = Field(
+        default=False,
+        description="Allow the memory_write tool to persist agent-curated notes into "
+        "Dashboard.Memory. Off by default: every other statement the gateway issues is "
+        "readonly=true, and this flag only ever unlocks writes to that one store.",
+    )
+
     # Egress ceilings (4-layer guardrails)
     max_time_ms: int = Field(
         default=DEFAULT_MAX_TIME_MS,

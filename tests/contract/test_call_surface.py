@@ -560,12 +560,30 @@ async def test_database_health_check_call_returns_findings() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         statement = parse_qs(req.content.decode()).get("statement", [""])[0]
         if "Metadata.`Index`" in statement:
-            return httpx.Response(200, json={"status": "success", "results": [
-                {"IndexName": "a", "DatasetName": "Orders", "DataverseName": "S",
-                 "IndexStructure": "BTREE", "SearchKey": [["city"]], "IsPrimary": False},
-                {"IndexName": "b", "DatasetName": "Orders", "DataverseName": "S",
-                 "IndexStructure": "BTREE", "SearchKey": [["city"]], "IsPrimary": False},
-            ]})
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "results": [
+                        {
+                            "IndexName": "a",
+                            "DatasetName": "Orders",
+                            "DataverseName": "S",
+                            "IndexStructure": "BTREE",
+                            "SearchKey": [["city"]],
+                            "IsPrimary": False,
+                        },
+                        {
+                            "IndexName": "b",
+                            "DatasetName": "Orders",
+                            "DataverseName": "S",
+                            "IndexStructure": "BTREE",
+                            "SearchKey": [["city"]],
+                            "IsPrimary": False,
+                        },
+                    ],
+                },
+            )
         return httpx.Response(200, json={"status": "success", "results": []})
 
     server = _server_with_mock(handler)
@@ -668,8 +686,13 @@ async def test_profile_query_call() -> None:
                     "tasks": [
                         {
                             "counters": [
-                                {"name": "scan", "runtime-id": "ODID:1",
-                                 "run-time": 8.0, "cardinality-out": 100, "pages-read": 4}
+                                {
+                                    "name": "scan",
+                                    "runtime-id": "ODID:1",
+                                    "run-time": 8.0,
+                                    "cardinality-out": 100,
+                                    "pages-read": 4,
+                                }
                             ]
                         }
                     ],
@@ -764,3 +787,29 @@ async def test_structured_results_validate_against_advertised_schemas() -> None:
         result = await server.call_tool(name, args)
         assert not result.isError
         jsonschema.validate(result.structuredContent, tools[name].outputSchema)
+
+
+async def test_memory_write_disabled_by_default() -> None:
+    server = _server_with_mock(lambda r: httpx.Response(200, json={"status": "success"}))
+    result = await server.call_tool("memory_write", {"subject": "dv.ds", "text": "note"})
+    assert result.isError
+    assert result.structuredContent is None
+    assert "FORBIDDEN" in result.content[0].text
+
+
+async def test_memory_write_enabled_creates_and_validates_schema() -> None:
+    import jsonschema
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(req.content.decode()).get("statement", [""])[0]
+        results = [] if stmt.lstrip().startswith("SELECT") else []
+        return httpx.Response(200, json={"status": "success", "results": results})
+
+    server = _server_with_mock(handler, memory_write_enabled=True)
+    result = await server.call_tool("memory_write", {"subject": "dv.ds", "text": "note"})
+    assert not result.isError
+    assert result.structuredContent["action"] == "created"
+    tools = {t.name: t for t in await server.list_tools()}
+    jsonschema.validate(result.structuredContent, tools["memory_write"].outputSchema)
+    annotations = tools["memory_write"].annotations
+    assert annotations.readOnlyHint is False and annotations.destructiveHint is False

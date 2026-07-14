@@ -12,6 +12,7 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import okf_bundle  # noqa: E402
+import memory_eval  # noqa: E402
 import okf_consolidate  # noqa: E402
 import okf_refresh  # noqa: E402
 
@@ -326,3 +327,75 @@ def test_consolidate_updates_prunes_and_exempts() -> None:
     assert [row["subject"] for row in supersede] == ["forgotten"]
     assert supersede[0]["superseded_by"] == "consolidation-decay"
     assert supersede[0]["valid_to"] == NOW.isoformat()
+
+
+def test_eval_rank_orders_by_token_hits() -> None:
+    docs = [
+        {"subject": "a.low", "text": "revenue"},
+        {"subject": "a.high", "text": "revenue revenue orders"},
+    ]
+    ranked = memory_eval.rank(docs, memory_eval.tokenize("orders revenue!"), k=1)
+    assert [d["subject"] for d in ranked] == ["a.high"]
+
+
+def test_eval_scorers() -> None:
+    retrieved = [{"subject": "dv.ds", "text": "SELECT x FROM ds GROUP BY y"}]
+    assert memory_eval.score_recall({"expect_subjects": ["dv.ds"]}, retrieved) == {
+        "hit": 1.0,
+        "mrr": 1.0,
+    }
+    assert memory_eval.score_recall({"expect_subjects": ["dv.other"]}, retrieved) == {
+        "hit": 0.0,
+        "mrr": 0.0,
+    }
+    assert memory_eval.score_forgetting({"forbid_subjects": ["dv.ds"]}, retrieved) == {
+        "violations": 1.0
+    }
+    assert memory_eval.score_reuse({"expect_snippet": "GROUP BY"}, retrieved) == {"reused": 1.0}
+    assert memory_eval.score_reuse({}, retrieved) == {"reused": 0.0}
+    efficiency = memory_eval.score_efficiency(retrieved, store_chars=100)
+    assert efficiency["compression"] == pytest.approx(len(retrieved[0]["text"]) / 100)
+    assert memory_eval.score_efficiency([], store_chars=0)["compression"] == 0.0
+
+
+def test_eval_load_cases_rejects_unknown_axis(tmp_path: Path) -> None:
+    good = tmp_path / "cases.jsonl"
+    good.write_text('{"axis": "recall", "query": "q"}\n\n{"axis": "reuse", "query": "r"}\n')
+    assert [case["axis"] for case in memory_eval.load_cases(good)] == ["recall", "reuse"]
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"axis": "vibes"}\n')
+    with pytest.raises(ValueError, match="unknown axis"):
+        memory_eval.load_cases(bad)
+
+
+def test_eval_evaluate_aggregates_all_axes(monkeypatch) -> None:
+    store = {
+        "shop.orders": {"subject": "shop.orders", "text": "orders schema GROUP BY day"},
+        "shop.stale": {"subject": "shop.stale", "text": "irrelevant"},
+    }
+
+    def fake(cc: str, statement: str) -> dict:
+        if statement.startswith("SELECT VALUE SUM"):
+            return {"results": [1000]}
+        if 'm.subject = "' in statement:
+            subject = statement.split('m.subject = "', 1)[1].split('"', 1)[0]
+            return {"results": [store[subject]] if subject in store else []}
+        return {"results": [doc for doc in store.values() if "orders" in doc["text"]]}
+
+    monkeypatch.setattr(memory_eval, "execute", fake)
+    cases = [
+        {"axis": "recall", "query": "orders", "expect_subjects": ["shop.orders"]},
+        {
+            "axis": "recall",
+            "query": "orders",
+            "subject": "shop.orders",
+            "expect_subjects": ["shop.orders"],
+        },
+        {"axis": "forgetting", "query": "orders", "forbid_subjects": ["shop.stale"]},
+        {"axis": "reuse", "query": "orders", "expect_snippet": "GROUP BY"},
+    ]
+    report = memory_eval.evaluate("cc", cases, k=8)
+    assert report["recall"] == {"cases": 2, "hit_rate": 1.0, "mrr": 1.0}
+    assert report["forgetting"]["violations"] == 0
+    assert report["reuse"]["reuse_rate"] == 1.0
+    assert report["efficiency"]["mean_compression"] > 0

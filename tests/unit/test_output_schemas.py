@@ -25,6 +25,7 @@ EXPECTED_TOOLS = {
     "list_functions",
     "get_function",
     "memory_search",
+    "memory_write",
     "search_metadata",
     "get_cluster_status",
     "get_node_details",
