@@ -43,8 +43,10 @@ KIND = "semantic"
 _CURRENT_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = $subject AND m.valid_to IS UNKNOWN;"
 )
-_UPSERT = f"UPSERT INTO {MEMORY_DATASET} ($rows);"
-_INSERT = f"INSERT INTO {MEMORY_DATASET} ($rows);"
+# the engine binds $row as an object; the array constructor around it is
+# statement text because a bound array is not accepted as an INSERT body
+_UPSERT = f"UPSERT INTO {MEMORY_DATASET} ([$row]);"
+_INSERT = f"INSERT INTO {MEMORY_DATASET} ([$row]);"
 
 
 async def run_memory_write(
@@ -113,10 +115,10 @@ async def run_memory_write(
             await client.execute_memory_write(
                 _UPSERT,
                 client_context_id=ccid,
-                statement_parameters={"rows": [{**existing, "valid_to": now}]},
+                statement_parameters={"row": {**existing, "valid_to": now}},
             )
         await client.execute_memory_write(
-            _INSERT, client_context_id=ccid, statement_parameters={"rows": [row]}
+            _INSERT, client_context_id=ccid, statement_parameters={"row": row}
         )
     except GatewayError as err:
         return ToolResult.error(err)
