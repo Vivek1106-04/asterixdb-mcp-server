@@ -275,6 +275,17 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
         required=("matches",),
         description="Current OKF memory concepts matched by subject key, full text, and link hop.",
     ),
+    "memory_write": _obj(
+        {
+            "status": _STRING,
+            "subject": _STRING,
+            "action": _STRING,
+            "id": {"type": ["string", "null"]},
+        },
+        required=("action",),
+        description="Outcome of one bi-temporal memory write: created, annotated, "
+        "superseded, or unchanged, with the new row id when one was inserted.",
+    ),
     "search_metadata": _obj(
         {
             "status": _STRING,

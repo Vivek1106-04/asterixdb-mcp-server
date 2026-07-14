@@ -28,9 +28,7 @@ async def test_completion_handler_completes_dataverse_argument() -> None:
         )
 
     settings = Settings(cc_base_url="http://test-cc:19002")
-    http = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
-    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     server = build_server(settings, http=http)
     low = server._mcp_server
     assert types.CompleteRequest in low.request_handlers
@@ -66,6 +64,7 @@ async def test_advertises_exactly_the_expected_tools(server) -> None:
         "list_functions",
         "get_function",
         "memory_search",
+        "memory_write",
         "search_metadata",
         "get_cluster_status",
         "get_node_details",
@@ -92,9 +91,10 @@ async def test_every_tool_advertises_behavioral_annotations(server) -> None:
 
 async def test_read_only_tools_are_marked_read_only(server) -> None:
     tools = {t.name: t for t in await server.list_tools()}
-    # cancel_query mutates server-side execution state; everything else is read-only.
+    # cancel_query mutates execution state; memory_write persists notes into the
+    # settings-gated Dashboard.Memory store. Everything else is read-only.
     for name, tool in tools.items():
-        expected = name != "cancel_query"
+        expected = name not in ("cancel_query", "memory_write")
         assert tool.annotations.readOnlyHint is expected, name
 
 
@@ -126,9 +126,7 @@ async def test_output_schema_is_advertised_not_enforced_on_errors() -> None:
         return httpx.Response(500, json={"errors": [{"msg": "boom"}]})
 
     settings = Settings(cc_base_url="http://test-cc:19002")
-    http = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
-    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     server = build_server(settings, http=http)
     result = await server.call_tool("get_schema", {"dataverse": "D", "dataset": "X"})
     assert result.isError is True
@@ -183,15 +181,11 @@ async def test_resource_template_completion_resolves_dataset_argument() -> None:
     def handler(_req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            json={
-                "results": [{"DatasetName": "Orders", "DataverseName": "Sales"}]
-            },
+            json={"results": [{"DatasetName": "Orders", "DataverseName": "Sales"}]},
         )
 
     settings = Settings(cc_base_url="http://test-cc:19002")
-    http = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
-    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     server = build_server(settings, http=http)
     low = server._mcp_server
 
@@ -221,9 +215,7 @@ async def test_each_resource_template_reads_through_the_server() -> None:
         )
 
     settings = Settings(cc_base_url="http://test-cc:19002")
-    http = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
-    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     server = build_server(settings, http=http)
 
     for uri in (

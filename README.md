@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**26 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
+**27 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -64,6 +64,7 @@ a failed call to be rejected.
 | Discover | `search_metadata` | Cross-metadata search for datasets/types/indexes/functions. |
 | Discover | `get_dataset_statistics` | Sampled row-count/size estimate and ANALYZE freshness for a dataset. |
 | Memory | `memory_search` | OKF concept docs (schema, stats, proven queries) by subject key, full text, and link hop. |
+| Memory | `memory_write` | Persist one agent-curated note bi-temporally (opt-in: `ASTERIXDB_MCP_MEMORY_WRITE_ENABLED`; scoped to the memory store). |
 | Functions | `list_functions` | Built-in / user-defined functions, filtered by language. |
 | Functions | `get_function` | One function's signature, with near-name hints on a miss. |
 | Cluster | `get_cluster_status` | Live cluster state and node roster. |
@@ -92,6 +93,17 @@ rows, decays each learned memory's `trust` by usage-modulated half-life, and
 supersedes rows that fall below the trust floor (forgetting, with history
 retained). `memory_search` accepts `link_depth` (1–2) to pull multi-hop
 connected context along the concept link graph.
+
+`memory_write` is the one agent-facing write surface: it persists a curated
+note bi-temporally — new subjects become standalone note concepts, notes on
+catalog concepts land in the learned overlay and survive refreshes. It is off
+by default (`ASTERIXDB_MCP_MEMORY_WRITE_ENABLED=true` enables it) and the CC
+client refuses anything on that path except INSERT/UPSERT into
+`Dashboard.Memory`; every other statement the gateway issues stays
+`readonly=true`. `scripts/memory_eval.py` measures the memory layer on four
+axes — recall (hit@k, MRR), forgetting (stale-recall rate), context
+compression, and reuse of stored query patterns — from a JSONL case file, so
+retrieval changes are tuned against numbers rather than asserted.
 
 ### Resources
 
@@ -291,6 +303,7 @@ scripts/
                      #   --ground executes each doc's profiling queries + native ADVISE
   okf_bundle.py      # export/import the store as an OKF bundle (index.md, log.md, concepts)
   okf_consolidate.py # sleep-time pass: dedup, trust decay, forgetting (supersede below floor)
+  memory_eval.py     # eval harness: recall, forgetting, efficiency, reuse metrics from JSONL cases
 tests/
   unit/              # per-module unit tests
   contract/          # advertised MCP surface

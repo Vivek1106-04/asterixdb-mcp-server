@@ -87,6 +87,7 @@ from .tools.recommend_indexes import run_recommend_indexes
 from .tools.running_queries import run_list_running_queries
 from .tools.sample_dataset import run_sample_dataset
 from .tools.memory_search import run_memory_search
+from .tools.memory_write import run_memory_write
 from .tools.search_metadata import run_search_metadata
 
 EXECUTE_QUERY_DESCRIPTION = (
@@ -267,6 +268,19 @@ MEMORY_SEARCH_DESCRIPTION = (
     "gives you schema + working queries in one call, cheaper than get_schema + samples. If "
     "it returns no matches the store may not be materialized; fall back to get_schema / "
     "describe_dataverse."
+)
+
+MEMORY_WRITE_DESCRIPTION = (
+    "Persist one agent-curated note into the agentic-memory store so future sessions "
+    "retrieve it via memory_search instead of re-deriving it.\n\n"
+    "Write something when you learned a durable, non-obvious fact worth keeping: a data "
+    "caveat, a proven query pattern, business meaning of a field. Address it by `subject` "
+    "(the concept identity, e.g. 'MyDataverse.MyDataset'): notes on a catalog concept are "
+    "appended to its learned overlay and survive catalog refreshes; other subjects become "
+    "standalone note concepts. Reconciliation is bi-temporal — nothing is deleted, changed "
+    "facts are superseded. Duplicate notes are a no-op.\n\n"
+    "Writes are scoped to the memory store only and require the gateway to run with "
+    "memory writes enabled; every other statement this gateway issues stays read-only."
 )
 
 SEARCH_METADATA_DESCRIPTION = (
@@ -870,6 +884,42 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             limit=limit,
             follow_links=follow_links,
             link_depth=link_depth,
+        )
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="memory_write",
+        description=MEMORY_WRITE_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["memory_write"],
+    )
+    async def memory_write(
+        subject: Annotated[
+            str,
+            Field(description="Concept identity the note is about, e.g. 'MyDataverse.MyDataset'."),
+        ],
+        text: Annotated[
+            str, Field(description="The distilled note to keep (max 4000 chars). One durable fact.")
+        ],
+        links: Annotated[
+            list[str] | None,
+            Field(description="Related concept identities to link from this note."),
+        ] = None,
+        tags: Annotated[
+            list[str] | None, Field(description="Optional labels for grouping.")
+        ] = None,
+        source_query: Annotated[
+            str | None,
+            Field(description="SQL++ query that grounds the note, enabling later re-validation."),
+        ] = None,
+    ) -> types.CallToolResult:
+        result = await run_memory_write(
+            _client(),
+            settings,
+            subject=subject,
+            text=text,
+            links=links,
+            tags=tags,
+            source_query=source_query,
         )
         return _to_call_tool_result(result)
 

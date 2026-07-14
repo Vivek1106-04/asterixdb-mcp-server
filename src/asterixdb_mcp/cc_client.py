@@ -42,6 +42,9 @@ PLAN_FORMAT_JSON = "clean_json"
 # the gateway summarizes; the alternative ("dot") is a Graphviz rendering.
 HYRACKS_JOB_FORMAT_JSON = "json"
 
+# the only statement shapes the memory write path will pass through
+_MEMORY_WRITE_PREFIXES = ("INSERT INTO Dashboard.Memory", "UPSERT INTO Dashboard.Memory")
+
 # Acceptable JSON values that the CC may use for a successful query envelope.
 _SUCCESS_STATUSES = frozenset({"success"})
 
@@ -96,6 +99,48 @@ class CCClient:
             compiler_parameters=compiler_parameters,
             statement_parameters=statement_parameters,
         )
+        envelope = await self._post_query(form)
+        self._raise_on_envelope_error(envelope)
+        return envelope
+
+    async def execute_memory_write(
+        self,
+        statement: str,
+        *,
+        client_context_id: str,
+        statement_parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run one write statement against the agentic-memory store.
+
+        The single deliberate exception to the gateway's readonly=true rule,
+        guarded twice right here so no other code path can widen it: the
+        memory_write_enabled setting must be on, and the statement must be an
+        INSERT/UPSERT into ``Dashboard.Memory`` (the memory_write tool builds
+        it; row values are bound as statement parameters, never spliced).
+        """
+        if not self._settings.memory_write_enabled:
+            raise GatewayError(
+                ErrorType.FORBIDDEN,
+                "Memory writes are disabled. Set ASTERIXDB_MCP_MEMORY_WRITE_ENABLED=true "
+                "to allow the memory_write tool to persist notes.",
+            )
+        if not statement.lstrip().startswith(_MEMORY_WRITE_PREFIXES):
+            raise GatewayError(
+                ErrorType.FORBIDDEN,
+                "Only INSERT/UPSERT statements targeting Dashboard.Memory are permitted "
+                "on the memory write path.",
+            )
+        form = self._build_query_form(
+            statement,
+            client_context_id=client_context_id,
+            dataverse=None,
+            signature=False,
+            profile=False,
+            max_warnings=5,
+            compiler_parameters=None,
+            statement_parameters=statement_parameters,
+        )
+        form["readonly"] = "false"
         envelope = await self._post_query(form)
         self._raise_on_envelope_error(envelope)
         return envelope
