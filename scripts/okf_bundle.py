@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Export/import the agentic-memory store as an Open Knowledge Format bundle.
 
 **Export** turns the current rows of ``Dashboard.Memory`` into an OKF v0.1
@@ -23,7 +22,10 @@ superseded rows ARE the update history, so no separate changelog exists.
 **Import** loads a bundle directory back into the store through the same
 bi-temporal reconcile as the catalog refresh: unchanged concepts are skipped,
 changed ones superseded, new ones inserted. Round-tripping an unchanged store
-is a no-op.
+is a no-op. Each imported body is split against the store's deterministic
+core first — the catalog walk owns the core, so bundle edits land in the
+learned overlay, which the next re-walk carries forward instead of
+clobbering.
 
 Usage:
     python scripts/okf_bundle.py export <dir> [--cc URL] [--dataverse DV]
@@ -68,9 +70,6 @@ HISTORY_QUERY = (
 )
 
 
-# ---------------------------------------------------------------- paths
-
-
 def dataverse_of(subject: str) -> str:
     """The dataverse a concept belongs to, from its subject shape."""
     return subject.split("/", 1)[0].split(".", 1)[0]
@@ -94,8 +93,6 @@ def concept_path(doc: dict[str, Any]) -> Path | None:
         return Path(dataverse) / "types" / f"{subject.rsplit('/', 1)[1]}.md"
     return Path(dataverse) / "datasets" / f"{subject.split('.', 1)[1]}.md"
 
-
-# ---------------------------------------------------------------- frontmatter
 
 # Emitted values are JSON-encoded scalars/lists, which are valid YAML — no
 # YAML library needed for a faithful round-trip of our own bundles.
@@ -126,9 +123,6 @@ def parse_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
         except (json.JSONDecodeError, ValueError):
             meta[key.strip()] = value
     return meta, body.lstrip("\n")
-
-
-# ---------------------------------------------------------------- export
 
 
 def render_concept(doc: dict[str, Any], paths: dict[str, Path]) -> str:
@@ -217,9 +211,6 @@ def export_bundle(cc: str, out_dir: Path, dataverse: str | None) -> int:
     return len(current)
 
 
-# ---------------------------------------------------------------- import
-
-
 def load_bundle(bundle_dir: Path) -> dict[str, dict[str, Any]]:
     """Parse a bundle directory back into concept docs keyed by subject.
 
@@ -256,16 +247,41 @@ def _drop_related_section(body: str) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def split_layers(body: str, stored_core: str) -> tuple[str, str]:
+    """Split an imported concept body into (core, overlay).
+
+    The catalog walk owns the deterministic core, so an import can only
+    contribute overlay. Exported documents are ``core + overlay``, so a body
+    that still starts with the stored core splits at that boundary. If the
+    body was restructured by hand, any line that literally appears in the
+    stored core stays core and everything else becomes overlay. Without a
+    stored core (a concept this store has never seen) the body is its own
+    core.
+    """
+    if not stored_core:
+        return body, ""
+    trimmed = stored_core.rstrip("\n")
+    if body.startswith(trimmed):
+        remainder = body[len(trimmed):].strip("\n")
+        return stored_core, remainder + "\n" if remainder else ""
+    core_lines = set(trimmed.splitlines())
+    overlay_lines = [line for line in body.splitlines() if line.strip() and line not in core_lines]
+    overlay = "\n".join(overlay_lines)
+    return stored_core, overlay + "\n" if overlay else ""
+
+
 def import_bundle(cc: str, bundle_dir: Path) -> tuple[int, int, int]:
     docs = load_bundle(bundle_dir)
     current = fetch_current(cc)
+    for subject, doc in docs.items():
+        stored_core = str((current.get(subject) or {}).get("core") or "")
+        core, overlay = split_layers(str(doc["text"]), stored_core)
+        doc["core"] = core
+        doc["overlay"] = overlay
     now = datetime.now(timezone.utc).isoformat()
     inserts, supersede, unchanged = reconcile(docs, current, now, scope="__import__")
     apply(cc, inserts, supersede)
     return len(inserts), len(supersede), unchanged
-
-
-# ---------------------------------------------------------------- cli
 
 
 def main() -> int:
