@@ -856,7 +856,10 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         subject: Annotated[str | None, Field(description="Exact concept identity, e.g. 'MyDataverse.MyDataset'.")] = None,
         dataverse: Annotated[str | None, Field(description="Restrict matches to concepts of one dataverse.")] = None,
         limit: Annotated[int, Field(ge=1, le=50, description="Max concepts before link expansion.")] = 8,
-        follow_links: Annotated[bool, Field(description="Also pull concepts one link-hop from each hit.")] = True,
+        follow_links: Annotated[bool, Field(description="Also pull concepts linked from each hit.")] = True,
+        link_depth: Annotated[
+            int, Field(ge=1, le=2, description="Link-graph hops to traverse from the hits (2 = multi-hop context).")
+        ] = 1,
     ) -> types.CallToolResult:
         result = await run_memory_search(
             _client(),
@@ -866,6 +869,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             dataverse=dataverse,
             limit=limit,
             follow_links=follow_links,
+            link_depth=link_depth,
         )
         return _to_call_tool_result(result)
 
