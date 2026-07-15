@@ -97,10 +97,13 @@ def _metadata_handler(
     dataset: dict | None,
     datatype: dict | None,
     indexes: list[dict],
+    memory_rows: list[dict] | None = None,
 ) -> object:
     def handler(request: httpx.Request) -> httpx.Response:
         stmt = parse_qs(request.content.decode())["statement"][0]
-        if "`Dataset`" in stmt:
+        if "Dashboard.Memory" in stmt:
+            rows = memory_rows or []
+        elif "`Dataset`" in stmt:
             rows = [dataset] if dataset else []
         elif "`Datatype`" in stmt:
             rows = [datatype] if datatype else []
@@ -183,3 +186,38 @@ async def test_run_get_schema_success_assembles_document(settings: Settings) -> 
     assert result.structured["datasetFormatInfo"]["format"] == "COLUMNAR"
     assert result.structured["fields"][0]["name"] == "eventId"
     assert result.structured["secondaryIndexes"][0]["indexName"] == "by_ts"
+
+
+async def test_learned_notes_ride_with_the_schema(settings: Settings) -> None:
+    dataset = {"DatasetName": "customers", "DatatypeName": "CustomerType"}
+    memory = [
+        {"subject": "ShopDV.customers", "type": "Note", "text": "tags is a CSV string"},
+    ]
+    cap = make_capturing_cc(settings, handler=_metadata_handler(dataset, None, [], memory))
+
+    result = await run_get_schema(cap.client, settings, dataverse="ShopDV", dataset="customers")
+
+    assert result.is_error is False
+    assert result.structured["learnedNotes"] == [
+        {"subject": "ShopDV.customers", "note": "tags is a CSV string"}
+    ]
+    assert "tags is a CSV string" in result.text
+
+
+async def test_schema_succeeds_when_memory_store_is_unreachable(settings: Settings) -> None:
+    dataset = {"DatasetName": "customers", "DatatypeName": "CustomerType"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        if "Dashboard.Memory" in stmt:
+            return json_response(
+                {"status": "fatal", "errors": [{"code": "ASX1050", "msg": "no dataset"}]}
+            )
+        rows = [dataset] if "`Dataset`" in stmt else []
+        return json_response({"status": "success", "results": rows})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    result = await run_get_schema(cap.client, settings, dataverse="ShopDV", dataset="customers")
+
+    assert result.is_error is False
+    assert "learnedNotes" not in result.structured

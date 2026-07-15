@@ -21,6 +21,7 @@ from ..errors import GatewayError
 from ..plan_guard import ColumnarAdvisory, assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
 from . import ToolResult
+from .memory_notes import attach_statement_notes
 
 # Mirror the inputSchema bounds so gateway-side windowing stays consistent with
 # what the LLM was told it could request.
@@ -73,7 +74,12 @@ async def run_execute_query(
             compiler_parameters=validated_params,
         )
     except GatewayError as err:
-        return ToolResult.error(err)
+        # A failed query rides back with the learned notes for the datasets it
+        # referenced — often the note IS the fix (a field gotcha, a proven
+        # pattern) and the model never had to ask for it.
+        return await attach_statement_notes(
+            client, client_context_id, statement, ToolResult.error(err)
+        )
 
     rows = envelope.get("results") or []
     if not isinstance(rows, list):

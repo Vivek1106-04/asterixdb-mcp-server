@@ -10,7 +10,7 @@ import pytest
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.errors import ErrorType
 from asterixdb_mcp.tools.execute_query import MAX_LIMIT, run_execute_query
-from tests.conftest import make_capturing_cc
+from tests.conftest import json_response, make_capturing_cc
 
 pytestmark = pytest.mark.anyio
 
@@ -263,3 +263,26 @@ async def test_columnar_full_scan_flagged_run_and_minimized(settings: Settings) 
     assert result.structured["rowsReturned"] == COLUMNAR_FLAGGED_MAX_ROWS
     assert result.structured["moreAvailable"] is True
     assert "output minimized" in result.text
+
+
+async def test_failed_query_carries_learned_notes_for_its_datasets(settings: Settings) -> None:
+    from urllib.parse import parse_qs
+
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        if "Dashboard.Memory" in stmt:
+            rows = [{"subject": "ShopDV.customers", "type": "Note", "text": "use split()"}]
+            return json_response({"status": "success", "results": rows})
+        return json_response(
+            {"status": "fatal", "errors": [{"code": "ASX0002", "msg": "Type mismatch"}]}
+        )
+
+    cap = make_capturing_cc(settings, handler=handler)
+    result = await run_execute_query(
+        cap.client, settings, statement="SELECT * FROM ShopDV.customers b UNNEST b.tags c;"
+    )
+
+    assert result.is_error is True
+    assert "use split()" in result.text
