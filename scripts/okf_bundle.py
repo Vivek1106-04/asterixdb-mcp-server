@@ -1,6 +1,6 @@
 """Export/import the agentic-memory store as an Open Knowledge Format bundle.
 
-**Export** turns the current rows of ``Dashboard.Memory`` into an OKF v0.1
+**Export** turns the current rows of ``AgentMemory.Memory`` into an OKF v0.1
 bundle — a directory tree of markdown files with YAML frontmatter that any
 OKF-aware agent (including Google's Knowledge Catalog) consumes with zero
 translation, and a human browses on GitHub:
@@ -62,10 +62,10 @@ INDEX_TYPE = "AsterixDB Index"
 TYPE_TYPE = "AsterixDB Datatype"
 
 CURRENT_QUERY = (
-    'SELECT VALUE m FROM Dashboard.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
+    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
 )
 HISTORY_QUERY = (
-    "SELECT VALUE m FROM Dashboard.Memory m "
+    "SELECT VALUE m FROM AgentMemory.Memory m "
     'WHERE m.kind = "{kind}" AND m.valid_to IS NOT UNKNOWN;'
 )
 

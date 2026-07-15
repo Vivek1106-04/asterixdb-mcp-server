@@ -101,7 +101,7 @@ def _metadata_handler(
 ) -> object:
     def handler(request: httpx.Request) -> httpx.Response:
         stmt = parse_qs(request.content.decode())["statement"][0]
-        if "Dashboard.Memory" in stmt:
+        if "AgentMemory.Memory" in stmt:
             rows = memory_rows or []
         elif "`Dataset`" in stmt:
             rows = [dataset] if dataset else []
@@ -209,7 +209,7 @@ async def test_schema_succeeds_when_memory_store_is_unreachable(settings: Settin
 
     def handler(request: httpx.Request) -> httpx.Response:
         stmt = parse_qs(request.content.decode())["statement"][0]
-        if "Dashboard.Memory" in stmt:
+        if "AgentMemory.Memory" in stmt:
             return json_response(
                 {"status": "fatal", "errors": [{"code": "ASX1050", "msg": "no dataset"}]}
             )

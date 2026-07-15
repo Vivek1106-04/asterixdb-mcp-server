@@ -4,7 +4,7 @@ The write path of the memory layer. The read-only MCP gateway never mutates
 anything; this script talks to the cluster controller's query service directly
 and:
 
-1. bootstraps the ``Dashboard.Memory`` store (idempotent DDL: dataset +
+1. bootstraps the ``AgentMemory.Memory`` store (idempotent DDL: dataset +
    subject B-tree + full-text index over the concept bodies),
 2. walks the engine's ``okf_catalog()`` datasource function to get the current
    OKF concept bundle (one linked doc per dataverse/dataset/datatype/index),
@@ -54,7 +54,7 @@ from typing import Any
 
 KIND = "semantic"
 # the store itself must not be part of the knowledge it stores
-SELF_DATAVERSE = "Dashboard"
+SELF_DATAVERSE = "AgentMemory"
 # stamped on every statement the pipeline itself runs so the walk's workload
 # mining never echoes pipeline plumbing back into the concept docs
 PIPELINE_MARKER = "/*okf*/"
@@ -62,16 +62,16 @@ DATASET_CONCEPT_TYPES = ("AsterixDB Dataset", "AsterixDB External Dataset", "Ast
 MAX_ADVISED_STATEMENTS = 3
 
 BOOTSTRAP_STATEMENTS = (
-    "CREATE DATAVERSE Dashboard IF NOT EXISTS;",
-    "CREATE TYPE Dashboard.MemoryType IF NOT EXISTS AS OPEN { id: string };",
-    "CREATE DATASET Dashboard.Memory(MemoryType) IF NOT EXISTS PRIMARY KEY id;",
-    "CREATE INDEX memSubject IF NOT EXISTS ON Dashboard.Memory(subject: string?) ENFORCED;",
-    "CREATE INDEX memText IF NOT EXISTS ON Dashboard.Memory(`text`: string?) TYPE FULLTEXT ENFORCED;",
+    "CREATE DATAVERSE AgentMemory IF NOT EXISTS;",
+    "CREATE TYPE AgentMemory.MemoryType IF NOT EXISTS AS OPEN { id: string };",
+    "CREATE DATASET AgentMemory.Memory(MemoryType) IF NOT EXISTS PRIMARY KEY id;",
+    "CREATE INDEX memSubject IF NOT EXISTS ON AgentMemory.Memory(subject: string?) ENFORCED;",
+    "CREATE INDEX memText IF NOT EXISTS ON AgentMemory.Memory(`text`: string?) TYPE FULLTEXT ENFORCED;",
 )
 
 WALK_QUERY = 'SET `import-private-functions` "true"; SELECT VALUE c FROM okf_catalog({args}) c;'
 CURRENT_ROWS_QUERY = (
-    'SELECT VALUE m FROM Dashboard.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
+    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
 )
 
 
@@ -223,9 +223,9 @@ def _in_scope(subject: str, dataverse: str) -> bool:
 
 def apply(cc: str, inserts: list[dict[str, Any]], supersede: list[dict[str, Any]]) -> None:
     if supersede:
-        execute(cc, f"UPSERT INTO Dashboard.Memory ({json.dumps(supersede)});")
+        execute(cc, f"UPSERT INTO AgentMemory.Memory ({json.dumps(supersede)});")
     if inserts:
-        execute(cc, f"INSERT INTO Dashboard.Memory ({json.dumps(inserts)});")
+        execute(cc, f"INSERT INTO AgentMemory.Memory ({json.dumps(inserts)});")
 
 
 def ground(cc: str, bundle: dict[str, dict[str, Any]]) -> int:

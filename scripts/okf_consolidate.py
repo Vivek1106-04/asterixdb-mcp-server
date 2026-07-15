@@ -2,7 +2,7 @@
 """Sleep-time consolidation and forgetting for the agentic-memory store.
 
 A scheduled pass, run while the assistant is idle, that keeps
-``Dashboard.Memory`` healthy. Three operations in one job:
+``AgentMemory.Memory`` healthy. Three operations in one job:
 
 1. **Deduplicate** — the store is open, so nothing structurally prevents two
    *current* rows for one subject. Keep the newest (by ``valid_from``) and
@@ -40,7 +40,7 @@ DEFAULT_TRUST_FLOOR = 0.2
 ACCESS_HALF_LIFE_BONUS = 0.5
 
 ALL_CURRENT_QUERY = (
-    'SELECT VALUE m FROM Dashboard.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
+    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
 )
 
 

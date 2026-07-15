@@ -272,7 +272,7 @@ async def test_failed_query_carries_learned_notes_for_its_datasets(settings: Set
 
     def handler(request: httpx.Request) -> httpx.Response:
         stmt = parse_qs(request.content.decode())["statement"][0]
-        if "Dashboard.Memory" in stmt:
+        if "AgentMemory.Memory" in stmt:
             rows = [{"subject": "ShopDV.customers", "type": "Note", "text": "use split()"}]
             return json_response({"status": "success", "results": rows})
         return json_response(
