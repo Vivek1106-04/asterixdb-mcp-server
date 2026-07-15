@@ -92,6 +92,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
             "fields": _array_of_objects(),
             "secondaryIndexes": _array_of_objects(),
             "datasetFormatInfo": _obj({"format": _STRING}),
+            "learnedNotes": _array_of_objects(),
         },
         required=("dataset", "fields", "datasetFormatInfo"),
         description="Declared schema of one dataset, including ROW vs COLUMNAR storage format.",

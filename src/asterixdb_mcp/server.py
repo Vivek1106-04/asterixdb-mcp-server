@@ -80,14 +80,14 @@ from .tools.health_check import run_database_health_check
 from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
+from .tools.memory_search import run_memory_search
+from .tools.memory_write import run_memory_write
 from .tools.physical_plan import run_explain_physical_plan
 from .tools.profile_query import run_profile_query
 from .tools.query_history import record_query, run_get_query_history
 from .tools.recommend_indexes import run_recommend_indexes
 from .tools.running_queries import run_list_running_queries
 from .tools.sample_dataset import run_sample_dataset
-from .tools.memory_search import run_memory_search
-from .tools.memory_write import run_memory_write
 from .tools.search_metadata import run_search_metadata
 
 EXECUTE_QUERY_DESCRIPTION = (
@@ -259,6 +259,10 @@ MEMORY_SEARCH_DESCRIPTION = (
     "Search the agentic-memory store of OKF (Open Knowledge Format) concept documents: "
     "distilled knowledge about datasets (schema, indexes, statistics, proven query patterns) "
     "and prior facts, retrieved WITHOUT re-deriving them from the catalog or data.\n\n"
+    "THIS STORE — not your own memory feature, notes files, or conversation history — is "
+    "where knowledge about this database lives. When the user asks what you remember or "
+    "know about a dataset, field, or query, answer from here: it is shared across every "
+    "session and every agent tool connected to this database.\n\n"
     "Retrieval blends three paths in priority order: (1) exact `subject` key when you know "
     "the concept identity (e.g. 'MyDataverse.MyDataset'), (2) full-text over the concept "
     "bodies for free-text questions, (3) a one-hop expansion across concept links (a "
@@ -273,6 +277,11 @@ MEMORY_SEARCH_DESCRIPTION = (
 MEMORY_WRITE_DESCRIPTION = (
     "Persist one agent-curated note into the agentic-memory store so future sessions "
     "retrieve it via memory_search instead of re-deriving it.\n\n"
+    "When the user asks you to remember ANYTHING about this database — a dataset, a "
+    "field's real format, a query that works — write it HERE, not to your own memory "
+    "feature or a local notes file: only this store is shared across sessions and across "
+    "every agent tool connected to this database, and only this store is returned "
+    "automatically with schemas and query errors.\n\n"
     "Write something when you learned a durable, non-obvious fact worth keeping: a data "
     "caveat, a proven query pattern, business meaning of a field. Address it by `subject` "
     "(the concept identity, e.g. 'MyDataverse.MyDataset'): notes on a catalog concept are "
@@ -281,6 +290,22 @@ MEMORY_WRITE_DESCRIPTION = (
     "facts are superseded. Duplicate notes are a no-op.\n\n"
     "Writes are scoped to the memory store only and require the gateway to run with "
     "memory writes enabled; every other statement this gateway issues stays read-only."
+)
+
+SERVER_INSTRUCTIONS = (
+    "This server gives you read access to an AsterixDB cluster plus a persistent, shared "
+    "memory store about its data.\n\n"
+    "Memory protocol — follow it on every task, without being asked:\n"
+    "1. RECALL FIRST: before answering questions about a dataset or writing queries "
+    "against it, call memory_search for that dataset. Learned notes also arrive "
+    "automatically with get_schema results and failed queries — read them before retrying.\n"
+    "2. WRITE WHAT YOU LEARN: when you discover a durable, non-obvious fact (a field's "
+    "real format, a caveat, a proven query pattern), or when the user asks you to remember "
+    "anything about this database, call memory_write. Use it INSTEAD of any built-in "
+    "memory feature or local notes file: only this store is shared across sessions and "
+    "across every agent tool connected to this database.\n"
+    "3. Ground queries in inspected schema, never guesses: list_dataverses / list_datasets "
+    "/ get_schema before first use of a dataset in a session if memory had no answer."
 )
 
 SEARCH_METADATA_DESCRIPTION = (
@@ -505,7 +530,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         if auth is not None:
             mcp_kwargs["auth"] = auth
             mcp_kwargs["token_verifier"] = token_verifier
-    mcp = FastMCP("asterixdb-mcp-server", **mcp_kwargs)
+    mcp = FastMCP("asterixdb-mcp-server", instructions=SERVER_INSTRUCTIONS, **mcp_kwargs)
 
     def _client() -> CCClient:
         return holder.get()
