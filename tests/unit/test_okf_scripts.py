@@ -399,3 +399,68 @@ def test_eval_evaluate_aggregates_all_axes(monkeypatch) -> None:
     assert report["forgetting"]["violations"] == 0
     assert report["reuse"]["reuse_rate"] == 1.0
     assert report["efficiency"]["mean_compression"] > 0
+
+
+# memory_distill.py
+
+import memory_distill  # noqa: E402
+
+
+def test_distill_load_events_skips_malformed(tmp_path):
+    log = tmp_path / "s1.jsonl"
+    log.write_text('{"outcome": "success"}\nnot json\n[1,2]\n{"outcome": "error"}\n')
+    events = memory_distill.load_events(tmp_path)
+    assert [e["outcome"] for e in events] == ["success", "error"]
+
+
+def test_distill_proven_queries_requires_distinct_sessions():
+    stmt = "SELECT VALUE c FROM ShopDV.customers c LIMIT 5;"
+    events = [
+        {"outcome": "success", "statement": stmt, "session": "a"},
+        {"outcome": "success", "statement": stmt, "session": "a"},
+        {"outcome": "success", "statement": stmt, "session": "b"},
+        {"outcome": "error", "statement": stmt, "session": "c"},
+    ]
+    proven = memory_distill.proven_queries(events, min_sessions=2)
+    assert proven == [
+        (
+            "ShopDV.customers",
+            f"Proven query, used successfully in 2 sessions: {stmt}",
+            stmt,
+        )
+    ]
+    assert memory_distill.proven_queries(events, min_sessions=3) == []
+
+
+def test_distill_recurring_failures_excludes_resolved_subjects():
+    fail = {"outcome": "error", "statement": "SELECT a FROM DV.a x;", "error": "QUERY_ERROR"}
+    ok = {"outcome": "success", "statement": "SELECT a FROM DV.a x;"}
+    events = [fail, fail, fail]
+    cautions = memory_distill.recurring_failures(events, min_failures=3)
+    assert cautions == [
+        ("DV.a", "Caution: queries on this dataset failed 3 times with QUERY_ERROR.")
+    ]
+    assert memory_distill.recurring_failures([*events, ok], min_failures=3) == []
+
+
+def test_distill_write_note_reconciles(monkeypatch):
+    statements = []
+
+    def fake_execute(cc, statement):
+        statements.append(statement)
+        return {"results": []}
+
+    monkeypatch.setattr(memory_distill, "execute", fake_execute)
+    action = memory_distill.write_note("http://cc", "DV.a", "note", "SELECT 1;")
+    assert action == "created"
+    assert any("INSERT INTO AgentMemory.Memory" in s for s in statements)
+
+
+def test_distill_write_note_unchanged_writes_nothing(monkeypatch):
+    existing = {"subject": "DV.a", "type": "Note", "text": "note"}
+
+    def fake_execute(cc, statement):
+        return {"results": [existing]}
+
+    monkeypatch.setattr(memory_distill, "execute", fake_execute)
+    assert memory_distill.write_note("http://cc", "DV.a", "note") == "unchanged"
