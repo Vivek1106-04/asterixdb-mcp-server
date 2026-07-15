@@ -2,7 +2,7 @@
 
 The write side of the agentic-memory loop: an agent that learned something
 worth keeping (a caveat, a proven query, business meaning) persists it as an
-OKF concept row in ``Dashboard.Memory``. Reconciliation is bi-temporal and
+OKF concept row in ``AgentMemory.Memory``. Reconciliation is bi-temporal and
 layer-aware, mirroring the refresh pipeline:
 
 - unknown subject       -> a new standalone ``Note`` concept is inserted,

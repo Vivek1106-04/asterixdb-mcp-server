@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     memory_write_enabled: bool = Field(
         default=False,
         description="Allow the memory_write tool to persist agent-curated notes into "
-        "Dashboard.Memory. Off by default: every other statement the gateway issues is "
+        "AgentMemory.Memory. Off by default: every other statement the gateway issues is "
         "readonly=true, and this flag only ever unlocks writes to that one store.",
     )
 

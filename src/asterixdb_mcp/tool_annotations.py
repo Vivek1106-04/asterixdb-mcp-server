@@ -93,7 +93,7 @@ TOOL_ANNOTATIONS["cancel_query"] = ToolAnnotations(
     openWorldHint=True,
 )
 
-# memory_write persists agent-curated notes into the Dashboard.Memory store —
+# memory_write persists agent-curated notes into the AgentMemory.Memory store —
 # the one write surface, gated by settings and scoped to that store in the CC
 # client. It supersedes rather than deletes, and re-writing the same note is a
 # no-op, so it is non-destructive and idempotent.

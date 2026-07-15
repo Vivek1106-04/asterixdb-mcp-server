@@ -46,7 +46,7 @@ def test_no_tool_is_marked_destructive() -> None:
 
 def test_only_sanctioned_tools_are_not_read_only() -> None:
     # cancel_query mutates execution state; memory_write persists notes into the
-    # Dashboard.Memory store (settings-gated, scoped in the CC client). Every
+    # AgentMemory.Memory store (settings-gated, scoped in the CC client). Every
     # other tool stays readonly=true end to end.
     not_read_only = {n for n, a in TOOL_ANNOTATIONS.items() if a.readOnlyHint is not True}
     assert not_read_only == {"cancel_query", "memory_write"}

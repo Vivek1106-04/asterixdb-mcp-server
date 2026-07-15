@@ -80,7 +80,7 @@ async def test_new_subject_creates_note_concept(write_settings: Settings) -> Non
     select_form, insert_form = (_form_of(req) for req in cap.requests)
     assert select_form["readonly"] == "true" and "$subject" in select_form
     assert insert_form["readonly"] == "false"
-    assert insert_form["statement"].startswith("INSERT INTO Dashboard.Memory")
+    assert insert_form["statement"].startswith("INSERT INTO AgentMemory.Memory")
     assert '"type": "Note"' in insert_form["$row"]
     assert '"trust": 1.0' in insert_form["$row"]
     assert '"source_query": "SELECT 1;"' in insert_form["$row"]
@@ -102,7 +102,7 @@ async def test_walk_owned_concept_gets_annotated_overlay(write_settings: Setting
     )
     assert result.structured["action"] == "annotated"
     upsert_form, insert_form = (_form_of(req) for req in cap.requests[1:])
-    assert upsert_form["statement"].startswith("UPSERT INTO Dashboard.Memory")
+    assert upsert_form["statement"].startswith("UPSERT INTO AgentMemory.Memory")
     assert '"valid_to"' in upsert_form["$row"]
     assert (
         "- old note\\n\\n- `price` is in cents" in insert_form["$row"].replace("\\u0060", "`")
@@ -185,7 +185,7 @@ async def test_cc_client_write_guard_rejects_foreign_statements(
     disabled = make_capturing_cc(settings)
     with pytest.raises(GatewayError) as excinfo:
         await disabled.client.execute_memory_write(
-            "INSERT INTO Dashboard.Memory ([$row]);", client_context_id="sess::t::1"
+            "INSERT INTO AgentMemory.Memory ([$row]);", client_context_id="sess::t::1"
         )
     assert excinfo.value.error_type is ErrorType.FORBIDDEN
     assert disabled.requests == []

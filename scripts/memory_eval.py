@@ -42,16 +42,16 @@ DEFAULT_K = 8
 FT_FETCH_WINDOW = 100
 
 SUBJECT_QUERY = (
-    'SELECT VALUE m FROM Dashboard.Memory m WHERE m.subject = "{subject}" '
+    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.subject = "{subject}" '
     "AND m.valid_to IS UNKNOWN;"
 )
 FULLTEXT_QUERY = (
-    "SELECT VALUE m FROM Dashboard.Memory m "
+    "SELECT VALUE m FROM AgentMemory.Memory m "
     'WHERE ftcontains(m.`text`, [{tokens}], {{"mode": "any"}}) AND m.valid_to IS UNKNOWN '
     f"LIMIT {FT_FETCH_WINDOW};"
 )
 STORE_SIZE_QUERY = (
-    "SELECT VALUE SUM(LENGTH(m.`text`)) FROM Dashboard.Memory m WHERE m.valid_to IS UNKNOWN;"
+    "SELECT VALUE SUM(LENGTH(m.`text`)) FROM AgentMemory.Memory m WHERE m.valid_to IS UNKNOWN;"
 )
 
 

@@ -1,6 +1,6 @@
 """memory_search: structural + lexical retrieval over the OKF memory store.
 
-The agentic-memory store (``Dashboard.Memory``) holds Open Knowledge Format
+The agentic-memory store (``AgentMemory.Memory``) holds Open Knowledge Format
 concept documents — schema knowledge, statistics, observed query patterns —
 materialized from the engine's ``okf_catalog()`` walk and distilled facts. This
 tool is the read side of that store, blending the three OKF retrieval paths in
@@ -43,7 +43,7 @@ MAX_LINK_DEPTH = 2
 # fetch window for the full-text pass before client-side ranking
 FT_FETCH_WINDOW = 100
 
-MEMORY_DATASET = "Dashboard.Memory"
+MEMORY_DATASET = "AgentMemory.Memory"
 
 # Concept identities are engine-emitted (dv.ds, dv.ds/index/x, dv/type/T ...):
 # letters, digits and a small punctuation set. Anything else is rejected so no

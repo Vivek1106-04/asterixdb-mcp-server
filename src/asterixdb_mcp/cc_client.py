@@ -43,7 +43,7 @@ PLAN_FORMAT_JSON = "clean_json"
 HYRACKS_JOB_FORMAT_JSON = "json"
 
 # the only statement shapes the memory write path will pass through
-_MEMORY_WRITE_PREFIXES = ("INSERT INTO Dashboard.Memory", "UPSERT INTO Dashboard.Memory")
+_MEMORY_WRITE_PREFIXES = ("INSERT INTO AgentMemory.Memory", "UPSERT INTO AgentMemory.Memory")
 
 # Acceptable JSON values that the CC may use for a successful query envelope.
 _SUCCESS_STATUSES = frozenset({"success"})
@@ -115,7 +115,7 @@ class CCClient:
         The single deliberate exception to the gateway's readonly=true rule,
         guarded twice right here so no other code path can widen it: the
         memory_write_enabled setting must be on, and the statement must be an
-        INSERT/UPSERT into ``Dashboard.Memory`` (the memory_write tool builds
+        INSERT/UPSERT into ``AgentMemory.Memory`` (the memory_write tool builds
         it; row values are bound as statement parameters, never spliced).
         """
         if not self._settings.memory_write_enabled:
@@ -127,7 +127,7 @@ class CCClient:
         if not statement.lstrip().startswith(_MEMORY_WRITE_PREFIXES):
             raise GatewayError(
                 ErrorType.FORBIDDEN,
-                "Only INSERT/UPSERT statements targeting Dashboard.Memory are permitted "
+                "Only INSERT/UPSERT statements targeting AgentMemory.Memory are permitted "
                 "on the memory write path.",
             )
         form = self._build_query_form(

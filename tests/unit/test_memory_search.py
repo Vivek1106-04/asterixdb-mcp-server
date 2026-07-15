@@ -72,7 +72,7 @@ async def test_overlong_query_rejected(settings: Settings) -> None:
 async def test_invalid_identifier_rejected(settings: Settings, field: str) -> None:
     cap = make_capturing_cc(settings)
     result = await run_memory_search(
-        cap.client, settings, query="orders", **{field: 'x"; DROP DATAVERSE Dashboard; --'}
+        cap.client, settings, query="orders", **{field: 'x"; DROP DATAVERSE X; --'}
     )
     assert result.structured["errorType"] == ErrorType.INVALID_PARAMETER.value
     assert cap.requests == []

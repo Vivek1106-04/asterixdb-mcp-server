@@ -92,7 +92,7 @@ async def test_every_tool_advertises_behavioral_annotations(server) -> None:
 async def test_read_only_tools_are_marked_read_only(server) -> None:
     tools = {t.name: t for t in await server.list_tools()}
     # cancel_query mutates execution state; memory_write persists notes into the
-    # settings-gated Dashboard.Memory store. Everything else is read-only.
+    # settings-gated AgentMemory.Memory store. Everything else is read-only.
     for name, tool in tools.items():
         expected = name not in ("cancel_query", "memory_write")
         assert tool.annotations.readOnlyHint is expected, name

@@ -77,7 +77,7 @@ a failed call to be rejected.
 
 The `memory_search` store is populated by `scripts/okf_refresh.py`, which walks
 the engine's `okf_catalog()` built-in and reconciles the emitted OKF concept
-docs into `Dashboard.Memory` bi-temporally (changed facts are superseded, never
+docs into `AgentMemory.Memory` bi-temporally (changed facts are superseded, never
 deleted). The gateway itself stays read-only; the refresh script is the write
 path and talks to the CC query service directly. Requires a cluster whose
 engine ships `okf_catalog()`. With `--ground` the refresh also executes each
@@ -99,7 +99,7 @@ note bi-temporally — new subjects become standalone note concepts, notes on
 catalog concepts land in the learned overlay and survive refreshes. It is off
 by default (`ASTERIXDB_MCP_MEMORY_WRITE_ENABLED=true` enables it) and the CC
 client refuses anything on that path except INSERT/UPSERT into
-`Dashboard.Memory`; every other statement the gateway issues stays
+`AgentMemory.Memory`; every other statement the gateway issues stays
 `readonly=true`. `scripts/memory_eval.py` measures the memory layer on four
 axes — recall (hit@k, MRR), forgetting (stale-recall rate), context
 compression, and reuse of stored query patterns — from a JSONL case file, so
@@ -299,7 +299,7 @@ src/asterixdb_mcp/
   resources/         # live cluster resources + SQL++ reference docs
   prompts/           # guided multi-step workflows
 scripts/
-  okf_refresh.py     # write path: materialize okf_catalog() into Dashboard.Memory (bi-temporal);
+  okf_refresh.py     # write path: materialize okf_catalog() into AgentMemory.Memory (bi-temporal);
                      #   --ground executes each doc's profiling queries + native ADVISE
   okf_bundle.py      # export/import the store as an OKF bundle (index.md, log.md, concepts)
   okf_consolidate.py # sleep-time pass: dedup, trust decay, forgetting (supersede below floor)
