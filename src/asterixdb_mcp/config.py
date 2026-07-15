@@ -92,6 +92,12 @@ class Settings(BaseSettings):
         "AgentMemory.Memory. Off by default: every other statement the gateway issues is "
         "readonly=true, and this flag only ever unlocks writes to that one store.",
     )
+    session_log_dir: str | None = Field(
+        default=None,
+        description="Directory for per-session JSONL query-outcome logs, the episodic "
+        "record that scripts/memory_distill.py distills into memory offline. Unset "
+        "disables session logging.",
+    )
 
     # Egress ceilings (4-layer guardrails)
     max_time_ms: int = Field(

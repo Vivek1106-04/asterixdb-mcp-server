@@ -80,6 +80,7 @@ from .tools.health_check import run_database_health_check
 from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
+from .tools.memory_capture import CaptureState, capture_query_outcome
 from .tools.memory_search import run_memory_search
 from .tools.memory_write import run_memory_write
 from .tools.physical_plan import run_explain_physical_plan
@@ -513,6 +514,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         client=CCClient(settings, http) if http is not None else None,
     )
     audit = AuditLog(settings.audit_log_ttl_s)
+    capture = CaptureState()
     pools = PermitPools.from_settings(settings)
 
     # Host/port/path are read by the Streamable HTTP transport (transport='http');
@@ -597,6 +599,15 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             statement=statement,
             dataverse=dataverse,
             result=result,
+        )
+        # Deterministic capture: distill an error->fix pair into the memory
+        # store the moment a failing statement finds its working form.
+        await capture_query_outcome(
+            _client(),
+            settings,
+            capture,
+            statement=statement,
+            result_error=(result.structured or {}).get("errorType") if result.is_error else None,
         )
         return _to_call_tool_result(result)
 

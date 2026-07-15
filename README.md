@@ -105,6 +105,17 @@ axes — recall (hit@k, MRR), forgetting (stale-recall rate), context
 compression, and reuse of stored query patterns — from a JSONL case file, so
 retrieval changes are tuned against numbers rather than asserted.
 
+Capture is automatic as well as agent-curated. The gateway watches its own
+query outcomes: when a statement against a dataset fails and a later statement
+against the same dataset succeeds in the same session, the error->fix pair is
+distilled into a learned note on that dataset's concept — no model involvement
+(requires memory writes enabled). With `ASTERIXDB_MCP_SESSION_LOG_DIR` set,
+every query outcome is also appended to a per-session JSONL log, and
+`scripts/memory_distill.py` distills the cross-session signal offline: queries
+proven across sessions become grounded notes (their statement is stored as
+`source_query`, so revalidation keeps them honest), and error classes that
+repeat without a recorded success become caution notes.
+
 ### Resources
 
 | URI | Purpose |
@@ -304,6 +315,7 @@ scripts/
   okf_bundle.py      # export/import the store as an OKF bundle (index.md, log.md, concepts)
   okf_consolidate.py # sleep-time pass: dedup, trust decay, forgetting (supersede below floor)
   memory_eval.py     # eval harness: recall, forgetting, efficiency, reuse metrics from JSONL cases
+  memory_distill.py  # offline distillation of session logs: proven queries + recurring failures
 tests/
   unit/              # per-module unit tests
   contract/          # advertised MCP surface
