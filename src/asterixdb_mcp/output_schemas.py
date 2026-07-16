@@ -282,10 +282,12 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
             "subject": _STRING,
             "action": _STRING,
             "id": {"type": ["string", "null"]},
+            "retired": _INT,
         },
         required=("action",),
         description="Outcome of one bi-temporal memory write: created, annotated, "
-        "superseded, or unchanged, with the new row id when one was inserted.",
+        "superseded, or unchanged, with the new row id when one was inserted and the "
+        "count of outdated lines retired via `replaces`.",
     ),
     "search_metadata": _obj(
         {

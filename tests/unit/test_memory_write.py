@@ -53,6 +53,7 @@ async def test_disabled_gateway_refuses_with_guidance(settings: Settings) -> Non
         ({"subject": 'x"; DROP', "text": "note"}, "Invalid subject"),
         ({"subject": "dv.ds", "text": "note", "links": ["ok", "bad link"]}, "Invalid links"),
         ({"subject": "dv.ds", "text": "note", "links": ["l"] * (MAX_LINKS + 1)}, "Too many links"),
+        ({"subject": "dv.ds", "text": "note", "replaces": "   "}, "non-empty replaces"),
     ],
 )
 async def test_invalid_input_rejected_preflight(
@@ -160,6 +161,109 @@ async def test_identical_note_text_is_noop(write_settings: Settings) -> None:
     )
     assert result.structured["action"] == "unchanged"
     assert len(cap.requests) == 1
+
+
+def _annotated_existing(overlay: str) -> dict:
+    return {
+        "id": "shop.orders@t0",
+        "subject": "shop.orders",
+        "type": "AsterixDB Dataset",
+        "core": "# Schema\n",
+        "overlay": overlay,
+        "text": "# Schema\n\n" + overlay,
+        "valid_from": "t0",
+    }
+
+
+STALE_NOTE = "- `tags` is a comma-separated string, use split()"
+CORRECTION = "- `tags` is an array of strings, unnest it directly"
+
+
+async def test_replaces_retires_contradicted_overlay_line(write_settings: Settings) -> None:
+    existing = _annotated_existing(f"{STALE_NOTE}\n\n- orders arrive out of order\n")
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text=CORRECTION,
+        replaces="comma-separated string",
+    )
+    assert result.structured["action"] == "annotated"
+    assert result.structured["retired"] == 1
+    row = _form_of(cap.requests[-1])["$row"]
+    assert "comma-separated" not in row
+    assert "array of strings" in row
+    assert "orders arrive out of order" in row
+
+
+async def test_replaces_match_is_case_insensitive(write_settings: Settings) -> None:
+    existing = _annotated_existing(f"{STALE_NOTE}\n")
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text=CORRECTION,
+        replaces="COMMA-SEPARATED",
+    )
+    assert result.structured["retired"] == 1
+    assert "comma-separated" not in _form_of(cap.requests[-1])["$row"]
+
+
+async def test_replaces_without_match_still_annotates(write_settings: Settings) -> None:
+    existing = _annotated_existing("- unrelated caveat\n")
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text=CORRECTION,
+        replaces="no such line",
+    )
+    assert result.structured["action"] == "annotated"
+    assert result.structured["retired"] == 0
+    row = _form_of(cap.requests[-1])["$row"]
+    assert "unrelated caveat" in row and "array of strings" in row
+
+
+async def test_replaces_retires_stale_line_even_when_note_already_present(
+    write_settings: Settings,
+) -> None:
+    # Without replaces this would be an "unchanged" no-op; the retirement is the change.
+    existing = _annotated_existing(f"{STALE_NOTE}\n\n{CORRECTION}\n")
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text=CORRECTION,
+        replaces="comma-separated string",
+    )
+    assert result.structured["action"] == "annotated"
+    assert result.structured["retired"] == 1
+    row = _form_of(cap.requests[-1])["$row"]
+    assert "comma-separated" not in row
+    assert row.count("array of strings") == 2  # once in overlay, once in merged text
+
+
+async def test_replaces_on_standalone_note_is_ignored(write_settings: Settings) -> None:
+    existing = {"subject": "team/glossary", "type": "Note", "text": "old", "id": "g@t0"}
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client, write_settings, subject="team/glossary", text="new", replaces="old"
+    )
+    assert result.structured["action"] == "superseded"
+    assert result.structured["retired"] == 0
+
+
+async def test_replaces_on_new_subject_retires_nothing(write_settings: Settings) -> None:
+    cap = make_capturing_cc(write_settings, handler=_store_handler(None))
+    result = await run_memory_write(
+        cap.client, write_settings, subject="team/glossary", text="new", replaces="old"
+    )
+    assert result.structured["action"] == "created"
+    assert result.structured["retired"] == 0
 
 
 async def test_cc_failure_maps_to_tool_error(write_settings: Settings) -> None:
