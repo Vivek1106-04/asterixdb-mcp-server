@@ -105,7 +105,9 @@ def write_note(cc: str, subject: str, note: str, source_query: str | None = None
     rows = [r for r in envelope.get("results", []) if isinstance(r, dict)]
     existing = rows[0] if rows else None
     now = datetime.now(timezone.utc).isoformat()
-    action, row = _reconcile(existing, subject, note, now, None, ["distilled"], source_query)
+    action, row, _retired = _reconcile(
+        existing, subject, note, now, None, ["distilled"], source_query
+    )
     if action == "unchanged":
         return action
     if existing is not None:
@@ -133,9 +135,12 @@ def main() -> int:
             actions[write_note(args.cc, subject, note, source_query)] += 1
         for subject, note in cautions:
             actions[write_note(args.cc, subject, note)] += 1
-    summary = "dry-run" if args.dry_run else " | ".join(
-        f"{count} {action}" for action, count in sorted(actions.items())
-    ) or "nothing to write"
+    summary = (
+        "dry-run"
+        if args.dry_run
+        else " | ".join(f"{count} {action}" for action, count in sorted(actions.items()))
+        or "nothing to write"
+    )
     print(
         f"memory_distill: {len(events)} events | {len(proven)} proven | "
         f"{len(cautions)} cautions | {summary}"

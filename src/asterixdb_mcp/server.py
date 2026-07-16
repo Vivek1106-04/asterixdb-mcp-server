@@ -289,6 +289,10 @@ MEMORY_WRITE_DESCRIPTION = (
     "appended to its learned overlay and survive catalog refreshes; other subjects become "
     "standalone note concepts. Reconciliation is bi-temporal — nothing is deleted, changed "
     "facts are superseded. Duplicate notes are a no-op.\n\n"
+    "CORRECTING A WRONG NOTE: overlay notes are append-only, so writing a correction alone "
+    "leaves the outdated note standing next to it. Pass `replaces` with a distinctive "
+    "fragment of the outdated note; matching lines are retired (they remain in history) "
+    "before your correction is written.\n\n"
     "Writes are scoped to the memory store only and require the gateway to run with "
     "memory writes enabled; every other statement this gateway issues stays read-only."
 )
@@ -947,6 +951,13 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             str | None,
             Field(description="SQL++ query that grounds the note, enabling later re-validation."),
         ] = None,
+        replaces: Annotated[
+            str | None,
+            Field(
+                description="Fragment of an outdated note this one corrects: stored lines "
+                "containing it (case-insensitive) are retired before the new note is written."
+            ),
+        ] = None,
     ) -> types.CallToolResult:
         result = await run_memory_write(
             _client(),
@@ -956,6 +967,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             links=links,
             tags=tags,
             source_query=source_query,
+            replaces=replaces,
         )
         return _to_call_tool_result(result)
 

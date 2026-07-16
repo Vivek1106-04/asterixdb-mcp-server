@@ -12,6 +12,11 @@ layer-aware, mirroring the refresh pipeline:
 - existing note         -> replaced bi-temporally (superseded, re-inserted),
 - text already present  -> no-op.
 
+Corrections: overlay annotations are otherwise append-only, so a contradicted
+note would sit next to its correction forever. Passing ``replaces`` retires
+every overlay block containing that fragment (case-insensitive) before the new
+note is appended; the retired lines survive in the superseded row.
+
 Nothing is ever deleted; superseded rows remain the concept's history.
 
 Defense-in-Depth:
@@ -58,6 +63,7 @@ async def run_memory_write(
     links: list[str] | None = None,
     tags: list[str] | None = None,
     source_query: str | None = None,
+    replaces: str | None = None,
 ) -> ToolResult:
     """Persist one agent-curated note, reconciled bi-temporally by subject."""
     if not settings.memory_write_enabled:
@@ -95,6 +101,15 @@ async def run_memory_write(
         return ToolResult.error(
             GatewayError(ErrorType.INVALID_PARAMETER, f"Too many links (max {MAX_LINKS}).")
         )
+    if replaces is not None:
+        replaces = replaces.strip()
+        if not replaces:
+            return ToolResult.error(
+                GatewayError(
+                    ErrorType.INVALID_PARAMETER,
+                    "Provide a non-empty replaces fragment, or omit it.",
+                )
+            )
 
     ccid = make_client_context_id(settings.agent_session_id, "memory_write")
     try:
@@ -105,11 +120,19 @@ async def run_memory_write(
         existing = rows[0] if rows else None
         now = datetime.now(timezone.utc).isoformat()
 
-        action, row = _reconcile(existing, subject, note, now, links, tags, source_query)
+        action, row, retired = _reconcile(
+            existing, subject, note, now, links, tags, source_query, replaces
+        )
         if action == "unchanged":
             return ToolResult(
                 text=f"Memory for '{subject}' already contains this note; nothing written.",
-                structured={"status": "success", "subject": subject, "action": action, "id": None},
+                structured={
+                    "status": "success",
+                    "subject": subject,
+                    "action": action,
+                    "id": None,
+                    "retired": 0,
+                },
             )
         if existing is not None:
             await client.execute_memory_write(
@@ -122,9 +145,16 @@ async def run_memory_write(
         )
     except GatewayError as err:
         return ToolResult.error(err)
+    retired_text = f", {retired} outdated line(s) retired" if retired else ""
     return ToolResult(
-        text=f"Memory {action}: '{subject}' ({row['id']}).",
-        structured={"status": "success", "subject": subject, "action": action, "id": row["id"]},
+        text=f"Memory {action}: '{subject}' ({row['id']}){retired_text}.",
+        structured={
+            "status": "success",
+            "subject": subject,
+            "action": action,
+            "id": row["id"],
+            "retired": retired,
+        },
     )
 
 
@@ -136,51 +166,81 @@ def _reconcile(
     links: list[str] | None,
     tags: list[str] | None,
     source_query: str | None,
-) -> tuple[str, dict[str, Any]]:
-    """Decide the write action and build the replacement row (pure)."""
+    replaces: str | None = None,
+) -> tuple[str, dict[str, Any], int]:
+    """Decide the write action and build the replacement row (pure).
+
+    Returns (action, row, retired) where retired counts the overlay blocks
+    removed because they contained the ``replaces`` fragment.
+    """
     optional = {
         key: value
         for key, value in (("links", links), ("tags", tags), ("source_query", source_query))
         if value
     }
     if existing is None:
-        return "created", {
+        return (
+            "created",
+            {
+                "id": f"{subject}@{now}",
+                "subject": subject,
+                "type": NOTE_TYPE,
+                "kind": KIND,
+                "text": note,
+                "valid_from": now,
+                "trust": 1.0,
+                "last_used": now,
+                **optional,
+            },
+            0,
+        )
+    if _is_walk_owned(existing):
+        core = str(existing.get("core") or existing.get("text", ""))
+        overlay = str(existing.get("overlay") or "")
+        kept, retired = _retire_overlay_blocks(overlay, replaces)
+        if retired == 0 and note in overlay:
+            return "unchanged", {}, 0
+        if not any(note in block for block in kept):
+            kept = [*kept, note]
+        new_overlay = "\n\n".join(kept) + "\n"
+        return (
+            "annotated",
+            {
+                **existing,
+                "id": f"{subject}@{now}",
+                "valid_from": now,
+                "core": core,
+                "overlay": new_overlay,
+                "text": core.rstrip("\n") + "\n\n" + new_overlay,
+                "last_used": now,
+            },
+            retired,
+        )
+    if str(existing.get("text", "")).strip() == note:
+        return "unchanged", {}, 0
+    return (
+        "superseded",
+        {
+            **existing,
             "id": f"{subject}@{now}",
-            "subject": subject,
-            "type": NOTE_TYPE,
-            "kind": KIND,
             "text": note,
             "valid_from": now,
             "trust": 1.0,
             "last_used": now,
             **optional,
-        }
-    if _is_walk_owned(existing):
-        core = str(existing.get("core") or existing.get("text", ""))
-        overlay = str(existing.get("overlay") or "")
-        if note in overlay:
-            return "unchanged", {}
-        new_overlay = (overlay.rstrip("\n") + "\n\n" + note + "\n") if overlay else note + "\n"
-        return "annotated", {
-            **existing,
-            "id": f"{subject}@{now}",
-            "valid_from": now,
-            "core": core,
-            "overlay": new_overlay,
-            "text": core.rstrip("\n") + "\n\n" + new_overlay,
-            "last_used": now,
-        }
-    if str(existing.get("text", "")).strip() == note:
-        return "unchanged", {}
-    return "superseded", {
-        **existing,
-        "id": f"{subject}@{now}",
-        "text": note,
-        "valid_from": now,
-        "trust": 1.0,
-        "last_used": now,
-        **optional,
-    }
+        },
+        0,
+    )
+
+
+def _retire_overlay_blocks(overlay: str, replaces: str | None) -> tuple[list[str], int]:
+    """Split the overlay into blocks and drop those contradicted by ``replaces``."""
+    blocks = [block.strip() for block in overlay.split("\n\n") if block.strip()]
+    if not replaces:
+        return blocks, 0
+    needle = replaces.lower()
+    kept = [block for block in blocks if needle not in block.lower()]
+    return kept, len(blocks) - len(kept)
 
 
 def _is_walk_owned(row: dict[str, Any]) -> bool:
