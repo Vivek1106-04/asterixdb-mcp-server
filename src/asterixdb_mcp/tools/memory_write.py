@@ -147,14 +147,33 @@ async def run_memory_write(
         return ToolResult.error(err)
     retired_text = f", {retired} outdated line(s) retired" if retired else ""
     return ToolResult(
-        text=f"Memory {action}: '{subject}' ({row['id']}){retired_text}.",
+        text=f"Memory {action}: '{subject}' ({row['id']}){retired_text}."
+        + _verification_guidance(source_query, retired),
         structured={
             "status": "success",
             "subject": subject,
             "action": action,
             "id": row["id"],
             "retired": retired,
+            "verified": bool(source_query),
         },
+    )
+
+
+def _verification_guidance(source_query: str | None, retired: int) -> str:
+    """Nudge the writer to ground unverified claims — hardest when a correction
+    just replaced prior knowledge on nothing but assertion."""
+    if source_query:
+        return ""
+    if retired:
+        return (
+            " The replacement is UNVERIFIED and just displaced prior knowledge: "
+            "confirm it with a query against the data, then write it again with "
+            "source_query so revalidation keeps it correct."
+        )
+    return (
+        " Note stored unverified — when a query can prove this fact, include it "
+        "as source_query so the note stays grounded."
     )
 
 
@@ -201,7 +220,9 @@ def _reconcile(
         if retired == 0 and note in overlay:
             return "unchanged", {}, 0
         if not any(note in block for block in kept):
-            kept = [*kept, note]
+            # Overlay lines carry their evidence status inline so auto-recall
+            # can show readers which claims a query actually proved.
+            kept = [*kept, note if source_query else f"(unverified) {note}"]
         new_overlay = "\n\n".join(kept) + "\n"
         return (
             "annotated",

@@ -81,6 +81,7 @@ from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
 from .tools.memory_capture import CaptureState, capture_query_outcome
+from .tools.memory_notes import RecallState
 from .tools.memory_search import run_memory_search
 from .tools.memory_write import run_memory_write
 from .tools.physical_plan import run_explain_physical_plan
@@ -308,8 +309,12 @@ SERVER_INSTRUCTIONS = (
     "real format, a caveat, a proven query pattern), or when the user asks you to remember "
     "anything about this database, call memory_write. Use it INSTEAD of any built-in "
     "memory feature or local notes file: only this store is shared across sessions and "
-    "across every agent tool connected to this database.\n"
-    "3. Ground queries in inspected schema, never guesses: list_dataverses / list_datasets "
+    "across every agent tool connected to this database. Include source_query whenever a "
+    "query proved the fact — grounded notes outrank assertions.\n"
+    "3. CORRECT THE STORE: if data you inspect contradicts a stored note, fix the store "
+    "immediately with memory_write(replaces=<fragment of the wrong note>) and ground the "
+    "correction with the query that proved it. Never leave a note you know is wrong.\n"
+    "4. Ground queries in inspected schema, never guesses: list_dataverses / list_datasets "
     "/ get_schema before first use of a dataset in a session if memory had no answer."
 )
 
@@ -519,6 +524,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     )
     audit = AuditLog(settings.audit_log_ttl_s)
     capture = CaptureState()
+    recall = RecallState()
     pools = PermitPools.from_settings(settings)
 
     # Host/port/path are read by the Streamable HTTP transport (transport='http');
@@ -591,6 +597,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
                     signature=signature,
                     max_warnings=maxWarnings,
                     download_format=downloadFormat,
+                    recall=recall,
                 )
         except GatewayError as err:
             result = ToolResult.error(err)
@@ -906,13 +913,29 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         annotations=TOOL_ANNOTATIONS["memory_search"],
     )
     async def memory_search(
-        query: Annotated[str, Field(description="Free-text question or keywords to match against concept bodies.")] = "",
-        subject: Annotated[str | None, Field(description="Exact concept identity, e.g. 'MyDataverse.MyDataset'.")] = None,
-        dataverse: Annotated[str | None, Field(description="Restrict matches to concepts of one dataverse.")] = None,
-        limit: Annotated[int, Field(ge=1, le=50, description="Max concepts before link expansion.")] = 8,
-        follow_links: Annotated[bool, Field(description="Also pull concepts linked from each hit.")] = True,
+        query: Annotated[
+            str,
+            Field(description="Free-text question or keywords to match against concept bodies."),
+        ] = "",
+        subject: Annotated[
+            str | None, Field(description="Exact concept identity, e.g. 'MyDataverse.MyDataset'.")
+        ] = None,
+        dataverse: Annotated[
+            str | None, Field(description="Restrict matches to concepts of one dataverse.")
+        ] = None,
+        limit: Annotated[
+            int, Field(ge=1, le=50, description="Max concepts before link expansion.")
+        ] = 8,
+        follow_links: Annotated[
+            bool, Field(description="Also pull concepts linked from each hit.")
+        ] = True,
         link_depth: Annotated[
-            int, Field(ge=1, le=2, description="Link-graph hops to traverse from the hits (2 = multi-hop context).")
+            int,
+            Field(
+                ge=1,
+                le=2,
+                description="Link-graph hops to traverse from the hits (2 = multi-hop context).",
+            ),
         ] = 1,
     ) -> types.CallToolResult:
         result = await run_memory_search(
@@ -1199,9 +1222,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         mime_type="application/json",
     )
     async def dataset_indexes_template(dataverse: str, dataset: str) -> str:
-        return await read_dataset_indexes(
-            _client(), settings, dataverse=dataverse, dataset=dataset
-        )
+        return await read_dataset_indexes(_client(), settings, dataverse=dataverse, dataset=dataset)
 
     @mcp.resource(
         "asterixdb://indexes/{dataverse}",

@@ -35,9 +35,7 @@ async def run_get_node_details(
     """Return per-node CC statistics for a single node controller."""
     node_id = node.strip()
     if not node_id:
-        return ToolResult.error(
-            GatewayError(ErrorType.INVALID_PARAMETER, "Provide a node id.")
-        )
+        return ToolResult.error(GatewayError(ErrorType.INVALID_PARAMETER, "Provide a node id."))
     if not _NODE_ID_RE.match(node_id):
         return ToolResult.error(
             GatewayError(

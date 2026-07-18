@@ -126,7 +126,7 @@ async def test_walk_owned_first_annotation_without_overlay(write_settings: Setti
     )
     assert result.structured["action"] == "annotated"
     insert_form = _form_of(cap.requests[-1])
-    assert '"overlay": "fresh note\\n"' in insert_form["$row"]
+    assert '"overlay": "(unverified) fresh note\\n"' in insert_form["$row"]
 
 
 async def test_duplicate_note_in_overlay_is_noop(write_settings: Settings) -> None:
@@ -293,3 +293,42 @@ async def test_cc_client_write_guard_rejects_foreign_statements(
         )
     assert excinfo.value.error_type is ErrorType.FORBIDDEN
     assert disabled.requests == []
+
+
+async def test_unverified_write_carries_verification_guidance(write_settings: Settings) -> None:
+    cap = make_capturing_cc(write_settings, handler=_store_handler(None))
+    result = await run_memory_write(cap.client, write_settings, subject="dv.ds", text="claim")
+    assert result.structured["verified"] is False
+    assert "unverified" in result.text
+
+
+async def test_grounded_write_has_no_guidance_and_no_prefix(write_settings: Settings) -> None:
+    existing = _annotated_existing("- other\n")
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text="- proven fact",
+        source_query="SELECT 1;",
+    )
+    assert result.structured["verified"] is True
+    assert "unverified" not in result.text
+    row = _form_of(cap.requests[-1])["$row"]
+    assert "(unverified) - proven fact" not in row
+    assert "- proven fact" in row
+
+
+async def test_unverified_replacement_gets_strong_guidance(write_settings: Settings) -> None:
+    existing = _annotated_existing(f"{STALE_NOTE}\n")
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text=CORRECTION,
+        replaces="comma-separated string",
+    )
+    assert result.structured["verified"] is False
+    assert "UNVERIFIED" in result.text and "source_query" in result.text
+    assert "(unverified) " + CORRECTION in _form_of(cap.requests[-1])["$row"].replace('\\"', '"')

@@ -85,8 +85,21 @@ def read_type_system() -> dict[str, Any]:
         "type-system",
         {
             "primitives": [
-                "boolean", "tinyint", "smallint", "integer", "bigint", "float", "double",
-                "string", "date", "time", "datetime", "duration", "interval", "uuid", "binary",
+                "boolean",
+                "tinyint",
+                "smallint",
+                "integer",
+                "bigint",
+                "float",
+                "double",
+                "string",
+                "date",
+                "time",
+                "datetime",
+                "duration",
+                "interval",
+                "uuid",
+                "binary",
             ],
             "collections": ["array ([...])", "multiset ({{...}})", "object ({...})"],
             "openVsClosed": (

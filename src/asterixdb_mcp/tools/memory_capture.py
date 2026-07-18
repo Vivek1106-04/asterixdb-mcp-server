@@ -73,8 +73,9 @@ async def capture_query_outcome(
         return
     for subject, note in capture.record(statement, result_error):
         # run_memory_write returns an error ToolResult rather than raising;
-        # capture never lets a failed note write surface to the caller.
-        await run_memory_write(client, settings, subject=subject, text=note)
+        # capture never lets a failed note write surface to the caller. The
+        # working statement doubles as grounding evidence for revalidation.
+        await run_memory_write(client, settings, subject=subject, text=note, source_query=statement)
 
 
 def _fix_note(pending: _PendingFailure, statement: str) -> str:

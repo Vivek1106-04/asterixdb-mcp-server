@@ -21,7 +21,7 @@ from ..errors import GatewayError
 from ..plan_guard import ColumnarAdvisory, assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
 from . import ToolResult
-from .memory_notes import attach_statement_notes
+from .memory_notes import RecallState, attach_statement_notes
 
 # Mirror the inputSchema bounds so gateway-side windowing stays consistent with
 # what the LLM was told it could request.
@@ -46,6 +46,7 @@ async def run_execute_query(
     max_warnings: int = 5,
     user_tag: str | None = None,
     download_format: ArtifactFormat | None = None,
+    recall: RecallState | None = None,
 ) -> ToolResult:
     """Execute a read-only SQL++ query and return a windowed result envelope."""
     offset = max(offset, 0)
@@ -78,7 +79,7 @@ async def run_execute_query(
         # referenced — often the note IS the fix (a field gotcha, a proven
         # pattern) and the model never had to ask for it.
         return await attach_statement_notes(
-            client, client_context_id, statement, ToolResult.error(err)
+            client, client_context_id, statement, ToolResult.error(err), recall=recall
         )
 
     rows = envelope.get("results") or []
@@ -89,9 +90,7 @@ async def run_execute_query(
     # Egress layer 4: cap what actually reaches the LLM. A flagged columnar full
     # scan tightens these caps further to minimize output (the query still ran).
     max_rows, max_bytes = _egress_caps(settings, advisory)
-    window, truncation = bound_rows_for_llm(
-        paged, max_rows, max_bytes, settings.max_field_chars
-    )
+    window, truncation = bound_rows_for_llm(paged, max_rows, max_bytes, settings.max_field_chars)
 
     # When the LLM did not see the whole result (rows beyond this page, or rows
     # dropped by the context-window cap), persist the full set to a downloadable
@@ -129,7 +128,12 @@ async def run_execute_query(
     if advisory is not None:
         structured["advisories"] = [advisory.to_payload()]
 
-    return ToolResult(text=_summarize(structured), structured=structured)
+    result = ToolResult(text=_summarize(structured), structured=structured)
+    # Ambient recall: the first successful query touching a dataset this session
+    # carries its learned notes, so recall never depends on the model asking.
+    return await attach_statement_notes(
+        client, client_context_id, statement, result, recall=recall, first_use_only=True
+    )
 
 
 def _egress_caps(settings: Settings, advisory: ColumnarAdvisory | None) -> tuple[int, int]:

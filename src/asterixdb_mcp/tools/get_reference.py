@@ -45,11 +45,7 @@ def run_get_reference(topic: str) -> ToolResult:
     if normalized == "all":
         topics = [reader() for reader in _READERS.values()]
         return ToolResult(
-            text=(
-                f"All {len(topics)} reference topics: "
-                + ", ".join(_READERS.keys())
-                + "."
-            ),
+            text=(f"All {len(topics)} reference topics: " + ", ".join(_READERS.keys()) + "."),
             structured={"status": "success", "topic": "all", "topics": topics},
         )
 

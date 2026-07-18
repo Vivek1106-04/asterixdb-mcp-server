@@ -22,9 +22,7 @@ from .errors import GatewayError
 
 # Secondary indexes only; the primary index is implicit and never recommended on
 # or reported against.
-ALL_SECONDARY_INDEXES_QUERY = (
-    "SELECT VALUE i FROM Metadata.`Index` i WHERE i.IsPrimary = false;"
-)
+ALL_SECONDARY_INDEXES_QUERY = "SELECT VALUE i FROM Metadata.`Index` i WHERE i.IsPrimary = false;"
 
 
 @dataclass(frozen=True)
@@ -176,8 +174,7 @@ async def fetch_indexes_detailed(
     yields an empty catalog document rather than a protocol-level error.
     """
     statement = (
-        "SELECT VALUE i FROM Metadata.`Index` i "
-        "WHERE i.IsPrimary = false AND i.DataverseName = $dv"
+        "SELECT VALUE i FROM Metadata.`Index` i WHERE i.IsPrimary = false AND i.DataverseName = $dv"
     )
     parameters: dict[str, Any] = {"dv": dataverse}
     if dataset is not None:

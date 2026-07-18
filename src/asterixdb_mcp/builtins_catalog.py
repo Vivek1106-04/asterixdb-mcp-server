@@ -79,6 +79,7 @@ _BUILTINS: tuple[BuiltinFunction, ...] = (
     BuiltinFunction("to_number", "type", "Cast a value to number."),
 )
 
+
 def all_builtins() -> tuple[BuiltinFunction, ...]:
     """Return the curated built-in functions."""
     return _BUILTINS

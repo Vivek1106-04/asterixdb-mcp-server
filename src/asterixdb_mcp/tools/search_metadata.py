@@ -108,9 +108,7 @@ async def run_search_metadata(
     )
 
 
-async def _candidates(
-    client: CCClient, ccid: str, collection: _Collection
-) -> list[dict[str, Any]]:
+async def _candidates(client: CCClient, ccid: str, collection: _Collection) -> list[dict[str, Any]]:
     """Fetch (kind, dataverse, name[, dataset]) candidates from one collection."""
     query = _CANDIDATE_QUERY_TEMPLATE.replace("__TABLE__", collection.table)
     try:

@@ -171,18 +171,14 @@ async def test_compile_error_surfaced(settings: Settings) -> None:
         settings,
         response_json={"status": "fatal", "errors": [{"code": "ASX1001", "msg": "Syntax error"}]},
     )
-    result = await run_check_index_usage(
-        cap.client, settings, statement="SELEKT 1 FROM x LIMIT 1;"
-    )
+    result = await run_check_index_usage(cap.client, settings, statement="SELEKT 1 FROM x LIMIT 1;")
     assert result.is_error is True
     assert result.structured["errorType"] == ErrorType.SYNTAX_ERROR.value
 
 
 async def test_no_plan_is_internal_error(settings: Settings) -> None:
     cap = make_capturing_cc(settings, response_json={"status": "success", "plans": {}})
-    result = await run_check_index_usage(
-        cap.client, settings, statement="SELECT * FROM x LIMIT 1;"
-    )
+    result = await run_check_index_usage(cap.client, settings, statement="SELECT * FROM x LIMIT 1;")
     assert result.is_error is True
     assert result.structured["errorType"] == ErrorType.INTERNAL.value
 
@@ -219,7 +215,5 @@ async def test_compile_transport_error(settings: Settings) -> None:
         raise httpx.ConnectError("down")
 
     cap = make_capturing_cc(settings, handler=handler)
-    result = await run_check_index_usage(
-        cap.client, settings, statement="SELECT * FROM x LIMIT 1;"
-    )
+    result = await run_check_index_usage(cap.client, settings, statement="SELECT * FROM x LIMIT 1;")
     assert result.is_error is True

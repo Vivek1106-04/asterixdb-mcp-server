@@ -112,9 +112,7 @@ def test_bytes_in_range_is_accepted() -> None:
 
 
 def test_multiple_params_validate_together() -> None:
-    result = validate_compiler_parameters(
-        {"compiler.parallelism": 4, "compiler.cbo": True}
-    )
+    result = validate_compiler_parameters({"compiler.parallelism": 4, "compiler.cbo": True})
     assert result == {"compiler.parallelism": "4", "compiler.cbo": "true"}
 
 

@@ -126,9 +126,7 @@ def test_kind_keeps_class_without_descriptor_suffix() -> None:
 
 def test_parse_job_strips_suffix_only_class_to_none() -> None:
     # A class that is *only* the noise suffix reduces to None, not "".
-    parsed = parse_job(
-        {"job": {"operators": [{"id": "x", "java-class": "OperatorDescriptor"}]}}
-    )
+    parsed = parse_job({"job": {"operators": [{"id": "x", "java-class": "OperatorDescriptor"}]}})
     assert parsed is not None
     assert parsed.operators[0].kind is None
     assert parsed.operator_counts == {}

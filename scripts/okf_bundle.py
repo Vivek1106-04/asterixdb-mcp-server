@@ -145,8 +145,9 @@ def render_index(dataverse_doc: dict[str, Any], members: list[dict[str, Any]]) -
     for member in sorted(members, key=lambda m: str(m["subject"])):
         path = concept_path(member)
         rel = Path(*path.parts[1:]).as_posix()
-        lines.append(f"* [{member.get('title', member['subject'])}]({rel}) - "
-                     f"{member.get('description', '')}")
+        lines.append(
+            f"* [{member.get('title', member['subject'])}]({rel}) - {member.get('description', '')}"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -154,8 +155,10 @@ def render_log(history: list[dict[str, Any]]) -> str:
     """log.md from the bi-temporal chain: one entry per superseded fact."""
     lines = ["# Update history", ""]
     for row in sorted(history, key=lambda r: str(r.get("valid_to", ""))):
-        lines.append(f"* {row.get('valid_to', '?')} — `{row.get('subject')}` superseded "
-                     f"(was current since {row.get('valid_from', '?')})")
+        lines.append(
+            f"* {row.get('valid_to', '?')} — `{row.get('subject')}` superseded "
+            f"(was current since {row.get('valid_from', '?')})"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -163,20 +166,20 @@ def export_bundle(cc: str, out_dir: Path, dataverse: str | None) -> int:
     current = [
         row
         for row in execute(cc, CURRENT_QUERY.format(kind=KIND)).get("results", [])
-        if isinstance(row, dict) and "subject" in row
+        if isinstance(row, dict)
+        and "subject" in row
         and (dataverse is None or dataverse_of(str(row["subject"])) == dataverse)
     ]
     history = [
         row
         for row in execute(cc, HISTORY_QUERY.format(kind=KIND)).get("results", [])
-        if isinstance(row, dict) and "subject" in row
+        if isinstance(row, dict)
+        and "subject" in row
         and (dataverse is None or dataverse_of(str(row["subject"])) == dataverse)
     ]
 
     paths = {
-        str(doc["subject"]): path
-        for doc in current
-        if (path := concept_path(doc)) is not None
+        str(doc["subject"]): path for doc in current if (path := concept_path(doc)) is not None
     }
     by_dataverse: dict[str, list[dict[str, Any]]] = {}
     dataverse_docs: dict[str, dict[str, Any]] = {}
@@ -262,7 +265,7 @@ def split_layers(body: str, stored_core: str) -> tuple[str, str]:
         return body, ""
     trimmed = stored_core.rstrip("\n")
     if body.startswith(trimmed):
-        remainder = body[len(trimmed):].strip("\n")
+        remainder = body[len(trimmed) :].strip("\n")
         return stored_core, remainder + "\n" if remainder else ""
     core_lines = set(trimmed.splitlines())
     overlay_lines = [line for line in body.splitlines() if line.strip() and line not in core_lines]

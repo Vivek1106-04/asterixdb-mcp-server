@@ -23,9 +23,7 @@ pytestmark = pytest.mark.anyio
 
 def _client(handler: object) -> CCClient:
     settings = Settings(cc_base_url="http://test-cc:19002")
-    http = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url=settings.cc_base_url
-    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     return CCClient(settings, http)
 
 

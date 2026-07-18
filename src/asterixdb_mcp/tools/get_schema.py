@@ -21,7 +21,7 @@ from ..errors import ErrorType, GatewayError
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
 from ..naming import resolve
 from . import ToolResult
-from .memory_notes import fetch_memory_notes, render_notes
+from .memory_notes import NO_NOTES_HINT, fetch_memory_notes, render_notes
 
 # Metadata field names, per MetadataRecordTypes.java. Centralized so a schema
 # drift only needs fixing in one place (and the startup self-check guards them).
@@ -80,6 +80,8 @@ async def run_get_schema(
     if notes:
         structured["learnedNotes"] = notes
         text += "\n\nLearned notes from memory about this dataset:\n" + render_notes(notes)
+    else:
+        text += "\n\n" + NO_NOTES_HINT.format(subject=f"{dataverse}.{dataset}")
     return ToolResult(text=text, structured=structured)
 
 

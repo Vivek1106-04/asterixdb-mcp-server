@@ -22,6 +22,7 @@ from ..errors import ErrorType, GatewayError
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
 from ..naming import quote_identifier, resolve
 from . import ToolResult
+from .memory_notes import NO_NOTES_HINT, fetch_memory_notes, render_notes
 
 DEFAULT_SIZE = 10
 MAX_SIZE = 100
@@ -72,7 +73,16 @@ async def run_sample_dataset(
         "results": window,
         "egress": egress,
     }
-    return ToolResult(text=f"Sampled {len(window)} row(s) from {dv}.{ds}.", structured=structured)
+    text = f"Sampled {len(window)} row(s) from {dv}.{ds}."
+    # Sampling is where a model discovers value-domain gotchas: ride the learned
+    # notes along, or prompt for the first write when none exist yet.
+    notes = await fetch_memory_notes(client, ccid, [f"{dv}.{ds}", dv])
+    if notes:
+        structured["learnedNotes"] = notes
+        text += "\n\nLearned notes from memory about this dataset:\n" + render_notes(notes)
+    else:
+        text += "\n\n" + NO_NOTES_HINT.format(subject=f"{dv}.{ds}")
+    return ToolResult(text=text, structured=structured)
 
 
 async def _resolve(client: CCClient, ccid: str, dataverse: str, dataset: str) -> tuple[str, str]:

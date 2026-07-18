@@ -20,10 +20,17 @@ _PROFILE_ENVELOPE = {
             {
                 "node-id": "nc1",
                 "tasks": [
-                    {"counters": [
-                        {"name": "scan", "runtime-id": "ODID:1", "run-time": 8.0,
-                         "cardinality-out": 100, "pages-read": 4}
-                    ]}
+                    {
+                        "counters": [
+                            {
+                                "name": "scan",
+                                "runtime-id": "ODID:1",
+                                "run-time": 8.0,
+                                "cardinality-out": 100,
+                                "pages-read": 4,
+                            }
+                        ]
+                    }
                 ],
             }
         ],
@@ -62,9 +69,7 @@ async def test_omits_profile_when_absent(settings: Settings) -> None:
 
 async def test_rejects_unsupported_function(settings: Settings) -> None:
     cap = make_capturing_cc(settings)
-    result = await run_profile_query(
-        cap.client, settings, statement="SELECT STDEV(x) FROM DV.T;"
-    )
+    result = await run_profile_query(cap.client, settings, statement="SELECT STDEV(x) FROM DV.T;")
     assert result.is_error is True
     assert result.structured["errorType"] == ErrorType.INVALID_PARAMETER.value
 

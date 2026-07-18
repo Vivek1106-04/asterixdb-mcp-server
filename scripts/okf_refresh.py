@@ -105,7 +105,9 @@ def fetch_bundle(cc: str, dataverse: str | None) -> dict[str, dict[str, Any]]:
     return {
         row["subject"]: row
         for row in rows
-        if isinstance(row, dict) and "subject" in row and not _in_scope(row["subject"], SELF_DATAVERSE)
+        if isinstance(row, dict)
+        and "subject" in row
+        and not _in_scope(row["subject"], SELF_DATAVERSE)
     }
 
 
@@ -140,9 +142,7 @@ def reground_overlay(overlay: str, old_core: str, new_core: str) -> tuple[str, l
     dropped: list[str] = []
     for line in overlay.splitlines():
         stale = [
-            ref
-            for ref in _BACKTICKED.findall(line)
-            if ref in old_core and ref not in new_core
+            ref for ref in _BACKTICKED.findall(line) if ref in old_core and ref not in new_core
         ]
         (dropped if stale else kept).append(line)
     text = "\n".join(kept).strip("\n")
@@ -216,8 +216,10 @@ def _walk_owned(row: dict[str, Any]) -> bool:
 
 def _in_scope(subject: str, dataverse: str) -> bool:
     """A scoped refresh must only supersede that dataverse's vanished concepts."""
-    return subject == dataverse or subject.startswith(dataverse + ".") or subject.startswith(
-        dataverse + "/"
+    return (
+        subject == dataverse
+        or subject.startswith(dataverse + ".")
+        or subject.startswith(dataverse + "/")
     )
 
 
@@ -277,7 +279,9 @@ def _grounded_advice(cc: str, doc: dict[str, Any]) -> list[str]:
     """Run the native ADVISE advisor over the doc's observed SELECT statements."""
     recommended: set[str] = set()
     statements = [
-        s for s in (doc.get("observed_queries") or []) if s.lstrip().lower().startswith(("select", "with", "from"))
+        s
+        for s in (doc.get("observed_queries") or [])
+        if s.lstrip().lower().startswith(("select", "with", "from"))
     ]
     for statement in statements[:MAX_ADVISED_STATEMENTS]:
         try:

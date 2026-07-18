@@ -173,7 +173,7 @@ async def test_auto_limit_appended_to_unbounded_select(settings: Settings) -> No
     result = await run_execute_query(
         cap.client, settings, statement="SELECT a FROM Yelp.Review", limit=20
     )
-    forwarded = cap.last_query_form()["statement"]
+    forwarded = _statement_matching(cap, "Yelp.Review")
     assert forwarded == "SELECT a FROM Yelp.Review LIMIT 20;"
     assert result.structured["effectiveStatement"] == "SELECT a FROM Yelp.Review LIMIT 20;"
 
@@ -286,3 +286,40 @@ async def test_failed_query_carries_learned_notes_for_its_datasets(settings: Set
 
     assert result.is_error is True
     assert "use split()" in result.text
+
+
+def _statement_matching(cap, fragment: str) -> str:
+    from urllib.parse import parse_qs
+
+    for req in cap.requests:
+        stmt = parse_qs(req.content.decode()).get("statement", [""])[0]
+        if fragment in stmt:
+            return stmt
+    raise AssertionError(f"no captured statement contains {fragment!r}")
+
+
+async def test_first_successful_query_carries_notes_then_dedups(settings: Settings) -> None:
+    from urllib.parse import parse_qs
+
+    from asterixdb_mcp.tools.memory_notes import RecallState
+
+    note_rows = [{"subject": "Yelp.Business", "type": "Note", "text": "split categories"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        rows = note_rows if "AgentMemory" in stmt else []
+        return json_response({"status": "success", "results": rows})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    recall = RecallState()
+
+    first = await run_execute_query(
+        cap.client, settings, statement="SELECT * FROM Yelp.Business LIMIT 1;", recall=recall
+    )
+    assert first.structured["learnedNotes"][0]["note"] == "split categories"
+    assert "split categories" in first.text
+
+    second = await run_execute_query(
+        cap.client, settings, statement="SELECT name FROM Yelp.Business LIMIT 2;", recall=recall
+    )
+    assert "learnedNotes" not in second.structured

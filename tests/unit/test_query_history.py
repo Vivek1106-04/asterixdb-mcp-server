@@ -39,8 +39,9 @@ def test_record_success_captures_rows_and_ccid(settings: Settings) -> None:
         text="ok",
         structured={"status": "success", "clientContextID": "sess-test::_::u1", "rowsReturned": 5},
     )
-    record_query(audit, settings, tool="execute_query", statement="SELECT 1;",
-                 dataverse="S", result=result)
+    record_query(
+        audit, settings, tool="execute_query", statement="SELECT 1;", dataverse="S", result=result
+    )
     entry = audit.get("sess-test::_::u1")
     assert entry is not None
     assert entry.outcome == "SUCCESS"
@@ -52,8 +53,14 @@ def test_record_success_captures_rows_and_ccid(settings: Settings) -> None:
 def test_record_error_mints_ccid_and_keeps_error_fields(settings: Settings) -> None:
     audit = AuditLog(ttl_s=900)
     err = GatewayError(ErrorType.SEMANTIC_ERROR, "cannot find dataset")
-    record_query(audit, settings, tool="execute_query", statement="SELECT bad;",
-                 dataverse=None, result=ToolResult.error(err))
+    record_query(
+        audit,
+        settings,
+        tool="execute_query",
+        statement="SELECT bad;",
+        dataverse=None,
+        result=ToolResult.error(err),
+    )
     entries = audit.recent(10)
     assert len(entries) == 1
     assert entries[0].outcome == "ERROR"
@@ -66,8 +73,14 @@ def test_record_error_does_not_clobber_existing_entries(settings: Settings) -> N
     audit = AuditLog(ttl_s=900)
     err = GatewayError(ErrorType.SYNTAX_ERROR, "boom")
     for _ in range(3):
-        record_query(audit, settings, tool="execute_query", statement="SELECT;",
-                     dataverse=None, result=ToolResult.error(err))
+        record_query(
+            audit,
+            settings,
+            tool="execute_query",
+            statement="SELECT;",
+            dataverse=None,
+            result=ToolResult.error(err),
+        )
     assert len(audit.recent(10)) == 3  # each error minted a distinct id
 
 
@@ -86,7 +99,10 @@ async def test_history_newest_first(settings: Settings) -> None:
     audit = AuditLog(ttl_s=900, clock=_stepping_clock())
     for n in range(3):
         record_query(
-            audit, settings, tool="execute_query", statement=f"SELECT {n};",
+            audit,
+            settings,
+            tool="execute_query",
+            statement=f"SELECT {n};",
             dataverse=None,
             result=ToolResult(text="ok", structured={"clientContextID": f"c{n}"}),
         )
@@ -97,12 +113,22 @@ async def test_history_newest_first(settings: Settings) -> None:
 
 async def test_history_failures_only(settings: Settings) -> None:
     audit = AuditLog(ttl_s=900, clock=_stepping_clock())
-    record_query(audit, settings, tool="execute_query", statement="SELECT ok;",
-                 dataverse=None,
-                 result=ToolResult(text="ok", structured={"clientContextID": "good"}))
-    record_query(audit, settings, tool="execute_query", statement="SELECT bad;",
-                 dataverse=None,
-                 result=ToolResult.error(GatewayError(ErrorType.SYNTAX_ERROR, "nope")))
+    record_query(
+        audit,
+        settings,
+        tool="execute_query",
+        statement="SELECT ok;",
+        dataverse=None,
+        result=ToolResult(text="ok", structured={"clientContextID": "good"}),
+    )
+    record_query(
+        audit,
+        settings,
+        tool="execute_query",
+        statement="SELECT bad;",
+        dataverse=None,
+        result=ToolResult.error(GatewayError(ErrorType.SYNTAX_ERROR, "nope")),
+    )
     result = await run_get_query_history(audit, settings, failures_only=True)
     assert result.structured["count"] == 1
     assert result.structured["queries"][0]["statement"] == "SELECT bad;"
@@ -112,9 +138,14 @@ async def test_history_failures_only(settings: Settings) -> None:
 async def test_history_limit_clamped(settings: Settings) -> None:
     audit = AuditLog(ttl_s=900, clock=_stepping_clock())
     for n in range(5):
-        record_query(audit, settings, tool="execute_query", statement=f"q{n}",
-                     dataverse=None,
-                     result=ToolResult(text="ok", structured={"clientContextID": f"c{n}"}))
+        record_query(
+            audit,
+            settings,
+            tool="execute_query",
+            statement=f"q{n}",
+            dataverse=None,
+            result=ToolResult(text="ok", structured={"clientContextID": f"c{n}"}),
+        )
     result = await run_get_query_history(audit, settings, limit=2)
     assert result.structured["count"] == 2
     over = await run_get_query_history(audit, settings, limit=MAX_LIMIT + 50)

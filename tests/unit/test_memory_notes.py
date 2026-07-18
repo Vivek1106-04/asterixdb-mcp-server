@@ -11,6 +11,7 @@ from asterixdb_mcp.tools import ToolResult
 from asterixdb_mcp.tools.memory_notes import (
     MAX_NOTE_LEN,
     MAX_NOTE_SUBJECTS,
+    RecallState,
     attach_statement_notes,
     fetch_memory_notes,
     render_notes,
@@ -59,8 +60,12 @@ async def test_fetch_returns_learned_notes_and_binds_subjects(settings: Settings
     notes = await fetch_memory_notes(cap.client, "ccid", ["ShopDV.customers", "ShopDV"])
 
     assert notes == [
-        {"subject": "ShopDV.customers", "note": "the tags field is a CSV string"},
-        {"subject": "ShopDV", "note": "learned"},
+        {
+            "subject": "ShopDV.customers",
+            "note": "the tags field is a CSV string",
+            "grounded": False,
+        },
+        {"subject": "ShopDV", "note": "learned", "grounded": None},
     ]
     form = parse_qs(cap.requests[0].content.decode())
     assert form["$subjects"][0] == '["ShopDV.customers", "ShopDV"]'
@@ -122,7 +127,8 @@ async def test_attach_appends_notes_to_error_result(settings: Settings) -> None:
     )
 
     assert result.is_error is True
-    assert result.structured == base.structured
+    assert result.structured["errorType"] == "x"
+    assert result.structured["learnedNotes"][0]["note"] == "use split() on tags"
     assert "use split() on tags" in result.text
     assert result.text.startswith("QUERY_ERROR: boom")
 
@@ -139,3 +145,76 @@ async def test_attach_returns_result_unchanged_when_no_notes(settings: Settings)
 def test_render_notes_formats_subject_and_note() -> None:
     rendered = render_notes([{"subject": "A.B", "note": "n1"}, {"subject": "C.D", "note": "n2"}])
     assert rendered == "- [A.B] n1\n- [C.D] n2"
+
+
+def test_recall_state_first_use_claims_once() -> None:
+    state = RecallState()
+    assert state.claim(["ShopDV.orders"], first_use_only=True) == ["ShopDV.orders"]
+    assert state.claim(["ShopDV.orders"], first_use_only=True) == []
+
+
+def test_recall_state_without_first_use_returns_all_but_marks() -> None:
+    state = RecallState()
+    assert state.claim(["HR.employees"], first_use_only=False) == ["HR.employees"]
+    assert state.claim(["HR.employees"], first_use_only=True) == []
+
+
+def test_render_notes_labels_evidence_status() -> None:
+    rendered = render_notes(
+        [
+            {"subject": "a.b", "note": "proven", "grounded": True},
+            {"subject": "a.c", "note": "hearsay", "grounded": False},
+            {"subject": "a", "note": "overlay text", "grounded": None},
+        ]
+    )
+    assert "- [a.b] (grounded) proven" in rendered
+    assert "- [a.c] (unverified) hearsay" in rendered
+    assert "- [a] overlay text" in rendered
+
+
+async def test_grounded_flag_reflects_source_query(settings: Settings) -> None:
+    rows = [
+        {"subject": "HR.employees", "type": "Note", "text": "fact", "source_query": "SELECT 1;"}
+    ]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    notes = await fetch_memory_notes(cap.client, "ccid", ["HR.employees"])
+    assert notes[0]["grounded"] is True
+
+
+async def test_attach_with_recall_skips_already_delivered_subjects(settings: Settings) -> None:
+    rows = [{"subject": "ShopDV.customers", "type": "Note", "text": "note"}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    state = RecallState()
+    base = ToolResult(text="ok", structured={"status": "success"})
+
+    first = await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT * FROM ShopDV.customers;",
+        base,
+        recall=state,
+        first_use_only=True,
+    )
+    assert "note" in first.text and first.structured["learnedNotes"]
+
+    second = await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT * FROM ShopDV.customers;",
+        base,
+        recall=state,
+        first_use_only=True,
+    )
+    assert second.text == "ok"
+    assert len(cap.requests) == 1  # no second lookup for a claimed subject
+
+
+async def test_attach_leaves_missing_structured_alone(settings: Settings) -> None:
+    rows = [{"subject": "ShopDV.customers", "type": "Note", "text": "note"}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(text="ok", structured=None)
+    result = await attach_statement_notes(
+        cap.client, "ccid", "SELECT * FROM ShopDV.customers;", base
+    )
+    assert result.structured is None
+    assert "note" in result.text

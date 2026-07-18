@@ -87,7 +87,7 @@ def _scan_plan(data_source: str, field: str | None) -> dict:
         unopt_root = {
             "operator": "select",
             "condition": {
-                "expressions": [f"eq(field-access-by-name($$d, AString: {{{field}}}), \"x\")"]
+                "expressions": [f'eq(field-access-by-name($$d, AString: {{{field}}}), "x")']
             },
             "inputs": [scan],
         }
@@ -379,8 +379,13 @@ async def test_fallback_skips_already_indexed_field(settings: Settings) -> None:
     # The filtered field already leads an existing index -> nothing to recommend
     # (exercises the no-novel-field, not-a-review branch).
     indexes = [
-        {"DataverseName": "Shop", "DatasetName": "Orders", "IndexName": "ix_city",
-         "IndexStructure": "BTREE", "SearchKey": [["city"]]}
+        {
+            "DataverseName": "Shop",
+            "DatasetName": "Orders",
+            "IndexName": "ix_city",
+            "IndexStructure": "BTREE",
+            "SearchKey": [["city"]],
+        }
     ]
     cap = make_capturing_cc(
         settings, handler=_fallback_handler(_scan_plan("Shop.Orders", "city"), indexes=indexes)
@@ -402,9 +407,7 @@ async def test_fallback_compile_error_is_skipped(settings: Settings) -> None:
 
 async def test_fallback_no_optimized_plan_is_skipped(settings: Settings) -> None:
     cap = make_capturing_cc(settings, handler=_fallback_handler(None))
-    result = await run_recommend_indexes(
-        cap.client, settings, statements=["SELECT 1 LIMIT 1;"]
-    )
+    result = await run_recommend_indexes(cap.client, settings, statements=["SELECT 1 LIMIT 1;"])
     assert result.structured["statementsAnalyzed"] == 0
     assert result.structured["skipped"][0]["errorType"] == ErrorType.INTERNAL.value
 

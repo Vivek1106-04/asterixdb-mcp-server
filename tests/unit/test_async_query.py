@@ -87,9 +87,7 @@ async def test_submit_surfaces_compile_error(
 ) -> None:
     envelope = {"status": "fatal", "errors": [{"code": "ASX1001", "msg": "Syntax error"}]}
     cap = make_capturing_cc(settings, response_json=envelope)
-    result = await run_submit_async_query(
-        cap.client, settings, audit, pools, statement="SELEKT 1;"
-    )
+    result = await run_submit_async_query(cap.client, settings, audit, pools, statement="SELEKT 1;")
     assert result.is_error is True
     assert result.structured["errorType"] == ErrorType.SYNTAX_ERROR.value
 
@@ -281,16 +279,12 @@ async def test_fetch_unknown_client_context_id_is_not_found(
     settings: Settings, audit: AuditLog
 ) -> None:
     cap = make_capturing_cc(settings)
-    result = await run_fetch_query_result(
-        cap.client, settings, audit, client_context_id="nope"
-    )
+    result = await run_fetch_query_result(cap.client, settings, audit, client_context_id="nope")
     assert result.is_error is True
     assert result.structured["errorType"] == ErrorType.NOT_FOUND.value
 
 
-async def test_fetch_before_completion_is_not_ready(
-    settings: Settings, audit: AuditLog
-) -> None:
+async def test_fetch_before_completion_is_not_ready(settings: Settings, audit: AuditLog) -> None:
     _seed_submission(audit)  # no result handle yet
     cap = make_capturing_cc(settings)
     result = await run_fetch_query_result(
@@ -340,9 +334,7 @@ async def test_fetch_no_overflow_writes_no_artifact(
 ) -> None:
     settings = settings.model_copy(update={"artifacts_dir": str(tmp_path)})
     _seed_completed(audit)
-    cap = make_capturing_cc(
-        settings, response_json={"status": "success", "results": [{"i": 1}]}
-    )
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": [{"i": 1}]})
 
     result = await run_fetch_query_result(
         cap.client, settings, audit, client_context_id="sess-test::_::u", limit=20
@@ -389,9 +381,7 @@ async def test_fetch_wraps_scalar_result(settings: Settings, audit: AuditLog) ->
     assert result.structured["results"] == [42]
 
 
-async def test_fetch_propagates_transport_error(
-    settings: Settings, audit: AuditLog
-) -> None:
+async def test_fetch_propagates_transport_error(settings: Settings, audit: AuditLog) -> None:
     _seed_completed(audit)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -421,9 +411,7 @@ async def test_fetch_handles_error(settings: Settings, audit: AuditLog) -> None:
 
 
 async def test_cancel_success_forgets_entry(settings: Settings, audit: AuditLog) -> None:
-    audit.record(
-        AuditEntry("sess-test::_::u", "sess", "SELECT 1;", audit.now(), handle="h")
-    )
+    audit.record(AuditEntry("sess-test::_::u", "sess", "SELECT 1;", audit.now(), handle="h"))
     cap = make_capturing_cc(settings, handler=lambda r: httpx.Response(200))
 
     result = await run_cancel_query(
@@ -434,9 +422,7 @@ async def test_cancel_success_forgets_entry(settings: Settings, audit: AuditLog)
     assert audit.get("sess-test::_::u") is None
 
 
-async def test_cancel_not_found_forgets_stale_entry(
-    settings: Settings, audit: AuditLog
-) -> None:
+async def test_cancel_not_found_forgets_stale_entry(settings: Settings, audit: AuditLog) -> None:
     audit.record(AuditEntry("sess-test::_::u", "sess", "SELECT 1;", audit.now()))
     cap = make_capturing_cc(settings, handler=lambda r: httpx.Response(404))
 
