@@ -29,9 +29,7 @@ def _handler(sample_rows: Any) -> object:
 
 
 async def test_overflowing_sample_writes_artifact(settings: Settings, tmp_path: object) -> None:
-    settings = settings.model_copy(
-        update={"artifacts_dir": str(tmp_path), "max_rows_to_llm": 2}
-    )
+    settings = settings.model_copy(update={"artifacts_dir": str(tmp_path), "max_rows_to_llm": 2})
     rows = [{"i": n} for n in range(10)]
     cap = make_capturing_cc(settings, handler=_handler(rows))
 
@@ -60,7 +58,7 @@ async def test_samples_real_rows(settings: Settings) -> None:
     assert result.structured["rowsReturned"] == 1
     assert result.structured["results"][0]["state"] == "NV"
     # Backtick-quoted, parameter-free templated statement reached the CC.
-    assert "`Yelp`.`Business`" in cap.last_query_form()["statement"]
+    assert "`Yelp`.`Business`" in _statement_matching(cap, "AS d LIMIT")
 
 
 async def test_case_insensitive_resolution(settings: Settings) -> None:
@@ -76,7 +74,7 @@ async def test_size_is_clamped(settings: Settings) -> None:
         cap.client, settings, dataverse="Yelp", dataset="Business", size=10_000
     )
     assert result.structured["sampleSize"] == MAX_SIZE
-    assert f"LIMIT {MAX_SIZE};" in cap.last_query_form()["statement"]
+    assert f"LIMIT {MAX_SIZE};" in _statement_matching(cap, "AS d LIMIT")
 
 
 async def test_size_floor(settings: Settings) -> None:
@@ -141,3 +139,40 @@ async def test_sample_clamps_and_bounds_egress(settings: Settings) -> None:
     result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Review")
     assert "[clamped," in result.structured["results"][0]["text"]
     assert result.structured["egress"]["truncated"] is False
+
+
+def _statement_matching(cap, fragment: str) -> str:
+    from urllib.parse import parse_qs
+
+    for req in cap.requests:
+        stmt = parse_qs(req.content.decode()).get("statement", [""])[0]
+        if fragment in stmt:
+            return stmt
+    raise AssertionError(f"no captured statement contains {fragment!r}")
+
+
+async def test_learned_notes_ride_with_the_sample(settings: Settings) -> None:
+    note_rows = [{"subject": "Yelp.Business", "type": "Note", "text": "split categories"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        if "Metadata" in stmt:
+            rows: Any = _INVENTORY
+        elif "AgentMemory" in stmt:
+            rows = note_rows
+        else:
+            rows = [{"business_id": "x"}]
+        return json_response({"status": "success", "results": rows})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
+    assert result.structured["learnedNotes"][0]["note"] == "split categories"
+    assert "split categories" in result.text
+
+
+async def test_sample_without_notes_prompts_first_write(settings: Settings) -> None:
+    cap = make_capturing_cc(settings, handler=_handler([{"business_id": "x"}]))
+    result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
+    assert "learnedNotes" not in result.structured
+    assert "No learned notes exist for Yelp.Business" in result.text
+    assert "memory_write" in result.text

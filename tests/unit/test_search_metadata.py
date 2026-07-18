@@ -95,9 +95,13 @@ async def test_per_collection_failure_tolerated(settings: Settings) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         stmt = _table_of(req)
         if "Metadata.`Dataset`" in stmt:
-            return httpx.Response(200, json={"status": "success", "results": [
-                {"DatasetName": "thing", "DataverseName": "S"}
-            ]})
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "results": [{"DatasetName": "thing", "DataverseName": "S"}],
+                },
+            )
         raise httpx.ConnectError("down")
 
     cap = make_capturing_cc(settings, handler=handler)

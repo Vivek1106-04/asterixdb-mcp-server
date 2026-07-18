@@ -199,7 +199,7 @@ async def test_learned_notes_ride_with_the_schema(settings: Settings) -> None:
 
     assert result.is_error is False
     assert result.structured["learnedNotes"] == [
-        {"subject": "ShopDV.customers", "note": "tags is a CSV string"}
+        {"subject": "ShopDV.customers", "note": "tags is a CSV string", "grounded": False}
     ]
     assert "tags is a CSV string" in result.text
 
@@ -221,3 +221,5 @@ async def test_schema_succeeds_when_memory_store_is_unreachable(settings: Settin
 
     assert result.is_error is False
     assert "learnedNotes" not in result.structured
+    assert "No learned notes exist for ShopDV.customers" in result.text
+    assert "memory_write" in result.text

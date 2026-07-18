@@ -23,8 +23,15 @@ from tests.conftest import make_capturing_cc
 pytestmark = pytest.mark.anyio
 
 
-def _idx(name: str, dataset: str, keys: list, *, structure: str = "BTREE",
-         primary: bool = False, dataverse: str = "S") -> dict:
+def _idx(
+    name: str,
+    dataset: str,
+    keys: list,
+    *,
+    structure: str = "BTREE",
+    primary: bool = False,
+    dataverse: str = "S",
+) -> dict:
     return {
         "IndexName": name,
         "DatasetName": dataset,

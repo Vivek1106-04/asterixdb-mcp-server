@@ -14,8 +14,13 @@ pytestmark = pytest.mark.anyio
 
 
 async def test_reports_statistics_when_analyzed(settings: Settings) -> None:
-    row = {"dataverse": "DV", "dataset": "E", "rowCount": 1000, "avgItemSize": 200,
-           "sampleTarget": 1063}
+    row = {
+        "dataverse": "DV",
+        "dataset": "E",
+        "rowCount": 1000,
+        "avgItemSize": 200,
+        "sampleTarget": 1063,
+    }
     cap = make_capturing_cc(settings, response_json={"status": "success", "results": [row]})
     result = await run_get_dataset_statistics(cap.client, settings, dataverse="DV", dataset="E")
     assert result.is_error is False

@@ -39,9 +39,7 @@ def test_parse_index_row_builds_secondary_index() -> None:
         "IndexStructure": "BTREE",
         "SearchKey": [["city"]],
     }
-    assert parse_index_row(row) == SecondaryIndex(
-        "Shop", "Orders", "ix_city", "BTREE", ("city",)
-    )
+    assert parse_index_row(row) == SecondaryIndex("Shop", "Orders", "ix_city", "BTREE", ("city",))
 
 
 async def test_fetch_scopes_query_to_dataverse(settings: Settings) -> None:

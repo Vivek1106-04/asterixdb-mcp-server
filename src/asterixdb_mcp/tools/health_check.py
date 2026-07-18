@@ -201,9 +201,7 @@ def find_columnar_candidates(datasets: list[dict[str, Any]]) -> list[dict[str, A
 # helpers
 
 
-def _prefix_cover(
-    shorter: dict[str, Any], group: list[dict[str, Any]]
-) -> dict[str, Any] | None:
+def _prefix_cover(shorter: dict[str, Any], group: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return a longer same-structure index whose keys start with shorter's keys.
 
     Group entries are pre-filtered to have non-empty keys, so ``shorter["keys"]``

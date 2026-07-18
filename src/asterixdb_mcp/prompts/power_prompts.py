@@ -77,9 +77,7 @@ Steps:
 4. Re-run after each change and compare metrics; change one thing at a time.{target}"""
 
 
-def compose_recommend_indexes(
-    dataverse: str | None = None, dataset: str | None = None
-) -> str:
+def compose_recommend_indexes(dataverse: str | None = None, dataset: str | None = None) -> str:
     """Chain check_index_usage into a CREATE INDEX recommendation."""
     dataverse = dataverse or "<dataverse>"
     dataset = dataset or "<dataset>"
@@ -122,13 +120,11 @@ Steps:
 5. Always keep a LIMIT while exploring; nested UNNEST can multiply row counts."""
 
 
-def compose_explore_nested_data(
-    dataverse: str | None = None, dataset: str | None = None
-) -> str:
+def compose_explore_nested_data(dataverse: str | None = None, dataset: str | None = None) -> str:
     """Guide UNNEST / OBJECT_NAMES traversal of nested documents."""
-    body = _EXPLORE_NESTED_TEMPLATE.replace(
-        "__DATAVERSE__", dataverse or "<dataverse>"
-    ).replace("__DATASET__", dataset or "<dataset>")
+    body = _EXPLORE_NESTED_TEMPLATE.replace("__DATAVERSE__", dataverse or "<dataverse>").replace(
+        "__DATASET__", dataset or "<dataset>"
+    )
     return "\n\n".join((body, STORAGE_FORMAT_AWARENESS_BLOCK))
 
 

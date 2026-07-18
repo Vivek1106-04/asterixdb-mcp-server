@@ -277,6 +277,23 @@ The server speaks MCP over stdio, so any MCP-capable client works: launch the
 `ASTERIXDB_MCP_CC_BASE_URL` to your cluster. The model behind the client is your
 choice — the gateway is model-agnostic and holds no provider keys.
 
+### Route memory to the shared store
+
+Agent hosts ship their own memory features (rules files, "learn" commands,
+scratchpads) that intercept phrases like "remember this" before the model ever
+weighs the gateway's tools. Those host memories are private to one client on one
+machine; the gateway's store is shared across every session and every client
+connected to the database. To make the shared store win, add one rule to the
+client's custom-instructions / rules surface:
+
+> For anything about this database, use the asterixdb MCP tools — including
+> remembering: store facts with memory_write, never with your own memory
+> feature or notes files.
+
+The deterministic paths (learned notes attached to schemas, samples, first
+queries, and failures; automatic error→fix capture) work without this rule; the
+rule is what routes explicit "remember ..." requests correctly.
+
 ## Develop
 
 ```bash

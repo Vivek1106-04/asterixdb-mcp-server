@@ -146,8 +146,10 @@ async def run_recommend_indexes(
     # analyzed — the advice there rests on no statistics.
     analyzed_datasets = await fetch_analyzed_datasets(client, ccid, dataverse=dataverse)
     unanalyzed = _mark_analyzed(recommendations, analyzed_datasets)
-    method = SOURCE_ADVISE if native_used == analyzed and analyzed else (
-        SOURCE_HEURISTIC if native_used == 0 else "mixed"
+    method = (
+        SOURCE_ADVISE
+        if native_used == analyzed and analyzed
+        else (SOURCE_HEURISTIC if native_used == 0 else "mixed")
     )
     structured: dict[str, Any] = {
         "status": "success",
@@ -244,9 +246,9 @@ def _parse_advise(results: Any) -> _Advice | None:
     for row in results:
         if not isinstance(row, dict):
             continue
-        adviseinfo = row.get("advice", {}).get("adviseinfo") if isinstance(
-            row.get("advice"), dict
-        ) else None
+        adviseinfo = (
+            row.get("advice", {}).get("adviseinfo") if isinstance(row.get("advice"), dict) else None
+        )
         if not isinstance(adviseinfo, dict):
             continue
         recommended = _index_statements(
@@ -383,8 +385,7 @@ def _observe(
     single_dataset = len(datasets) == 1
     fields = extract_fields_from_predicates(predicates) if single_dataset else ()
     full_scan = (
-        "data-scan" in optimized.operator_counts
-        and "unnest-map" not in optimized.operator_counts
+        "data-scan" in optimized.operator_counts and "unnest-map" not in optimized.operator_counts
     )
     return [
         _Observation(dv, ds, full_scan=full_scan, fields=fields, predicates=predicates)
@@ -475,11 +476,7 @@ def _finalize(record: dict[str, Any]) -> dict[str, Any]:
         record["rationale"] = (
             f"{field} is filtered by {record['supportingStatements']} workload "
             f"statement(s) on {dv}.{ds} with no covering secondary index"
-            + (
-                "; those queries fall back to a full scan."
-                if record["usesFullScan"]
-                else "."
-            )
+            + ("; those queries fall back to a full scan." if record["usesFullScan"] else ".")
         )
     else:
         confidence = CONFIDENCE_LOW

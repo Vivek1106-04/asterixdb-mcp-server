@@ -16,14 +16,38 @@ def test_aggregates_counters_by_runtime_id_across_partitions() -> None:
     profile = {
         "job-id": "JID:1",
         "joblets": [
-            {"node-id": "nc1", "tasks": [
-                {"counters": [{"name": "scan", "runtime-id": "ODID:1",
-                               "run-time": 5.0, "cardinality-out": 50, "pages-read": 2}]}
-            ]},
-            {"node-id": "nc2", "tasks": [
-                {"counters": [{"name": "scan", "runtime-id": "ODID:1",
-                               "run-time": 3.0, "cardinality-out": 70, "pages-read": 1}]}
-            ]},
+            {
+                "node-id": "nc1",
+                "tasks": [
+                    {
+                        "counters": [
+                            {
+                                "name": "scan",
+                                "runtime-id": "ODID:1",
+                                "run-time": 5.0,
+                                "cardinality-out": 50,
+                                "pages-read": 2,
+                            }
+                        ]
+                    }
+                ],
+            },
+            {
+                "node-id": "nc2",
+                "tasks": [
+                    {
+                        "counters": [
+                            {
+                                "name": "scan",
+                                "runtime-id": "ODID:1",
+                                "run-time": 3.0,
+                                "cardinality-out": 70,
+                                "pages-read": 1,
+                            }
+                        ]
+                    }
+                ],
+            },
         ],
     }
     summary = parse_profile(profile)

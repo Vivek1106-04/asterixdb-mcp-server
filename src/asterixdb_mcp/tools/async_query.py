@@ -287,9 +287,7 @@ async def run_fetch_query_result(
     max_rows, max_bytes = settings.max_rows_to_llm, settings.max_bytes_to_llm
     if entry.advisory is not None:
         max_rows, max_bytes = minimized_caps(max_rows, max_bytes)
-    window, truncation = bound_rows_for_llm(
-        paged, max_rows, max_bytes, settings.max_field_chars
-    )
+    window, truncation = bound_rows_for_llm(paged, max_rows, max_bytes, settings.max_field_chars)
     more_available = (offset + limit < len(rows)) or truncation["truncated"]
     # Persist the full result for download when the fetched window did not deliver
     # everything (more pages, or rows trimmed for the context window).

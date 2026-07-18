@@ -123,3 +123,15 @@ async def test_unwritable_session_log_is_swallowed(settings: Settings, tmp_path:
         cap.client, settings, CaptureState(), statement=FAIL, result_error=None
     )
     assert cap.requests == []
+
+
+async def test_captured_fix_note_is_grounded_by_working_statement(settings: Settings) -> None:
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    state = CaptureState()
+    await capture_query_outcome(
+        cap.client, settings, state, statement=FAIL, result_error="QUERY_ERROR"
+    )
+    await capture_query_outcome(cap.client, settings, state, statement=FIX, result_error=None)
+    row = json.loads(parse_qs(cap.requests[-1].content.decode())["$row"][0])
+    assert row["source_query"] == FIX

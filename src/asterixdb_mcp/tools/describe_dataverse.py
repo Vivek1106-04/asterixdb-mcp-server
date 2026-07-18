@@ -136,6 +136,5 @@ def _dataset_line(dataset: dict[str, Any]) -> str:
     secondary = len(dataset.get("secondaryIndexes") or [])
     fmt = dataset.get("datasetFormatInfo", {}).get("format", "?")
     return (
-        f"  - {dataset.get('dataset')}: PK [{primary_key}]; "
-        f"{secondary} secondary index(es); {fmt}"
+        f"  - {dataset.get('dataset')}: PK [{primary_key}]; {secondary} secondary index(es); {fmt}"
     )

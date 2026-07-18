@@ -54,9 +54,7 @@ async def test_compile_query_does_not_raise_on_error(settings: Settings) -> None
 async def test_compile_query_requests_plan_when_asked(settings: Settings) -> None:
     cap = make_capturing_cc(settings, response_json={"status": "success", "plans": {}})
 
-    await cap.client.compile_query(
-        "SELECT 1;", client_context_id="sess::_::u", emit_plan=True
-    )
+    await cap.client.compile_query("SELECT 1;", client_context_id="sess::_::u", emit_plan=True)
 
     form = cap.last_query_form()
     assert form["optimized-logical-plan"] == "true"

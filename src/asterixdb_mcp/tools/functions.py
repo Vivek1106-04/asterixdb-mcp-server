@@ -123,9 +123,7 @@ async def run_list_functions(
         "moreAvailable": offset + limit < len(filtered),
         "functions": window,
     }
-    return ToolResult(
-        text=f"{len(window)} of {len(filtered)} function(s).", structured=structured
-    )
+    return ToolResult(text=f"{len(window)} of {len(filtered)} function(s).", structured=structured)
 
 
 async def run_get_function(

@@ -68,6 +68,7 @@ def _result_rows() -> _JSON:
 OUTPUT_SCHEMAS: dict[str, _JSON] = {
     "execute_query": _obj(
         {
+            "learnedNotes": _array_of_objects(),
             "status": _STRING,
             "results": _result_rows(),
             "rowsReturned": _INT,
@@ -137,6 +138,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
     ),
     "sample_dataset": _obj(
         {
+            "learnedNotes": _array_of_objects(),
             "status": _STRING,
             "dataverse": _STRING,
             "dataset": _STRING,
@@ -283,6 +285,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
             "action": _STRING,
             "id": {"type": ["string", "null"]},
             "retired": _INT,
+            "verified": {"type": "boolean"},
         },
         required=("action",),
         description="Outcome of one bi-temporal memory write: created, annotated, "

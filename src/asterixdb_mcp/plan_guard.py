@@ -34,8 +34,7 @@ _RESTRICTING_OPERATORS = ("project", "select")
 ADVISORY_TYPE = "COLUMNAR_FULL_SCAN"
 
 _FORMAT_QUERY = (
-    "SELECT VALUE d FROM Metadata.`Dataset` d "
-    "WHERE d.DataverseName = $dv AND d.DatasetName = $ds;"
+    "SELECT VALUE d FROM Metadata.`Dataset` d WHERE d.DataverseName = $dv AND d.DatasetName = $ds;"
 )
 
 
