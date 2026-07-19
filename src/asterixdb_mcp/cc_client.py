@@ -50,6 +50,19 @@ _MEMORY_WRITE_PREFIXES = (
     "INSERT INTO AgentMemory.SessionEvent",
 )
 
+
+def _memory_bootstrap_statements() -> frozenset[str]:
+    """The idempotent AgentMemory DDL, allowed on the write path by EXACT match.
+
+    Byte-for-byte equality against the canonical strings in okf_walk — never a
+    prefix or pattern — so automatic store bootstrap cannot widen into a
+    general DDL capability. Imported lazily to avoid a module cycle
+    (okf_walk imports CCClient).
+    """
+    from .okf_walk import BOOTSTRAP_STATEMENTS
+
+    return frozenset(BOOTSTRAP_STATEMENTS)
+
 # Acceptable JSON values that the CC may use for a successful query envelope.
 _SUCCESS_STATUSES = frozenset({"success"})
 
@@ -129,11 +142,14 @@ class CCClient:
                 "Memory writes are disabled. Set ASTERIXDB_MCP_MEMORY_WRITE_ENABLED=true "
                 "to allow the memory_write tool to persist notes.",
             )
-        if not statement.lstrip().startswith(_MEMORY_WRITE_PREFIXES):
+        if (
+            not statement.lstrip().startswith(_MEMORY_WRITE_PREFIXES)
+            and statement not in _memory_bootstrap_statements()
+        ):
             raise GatewayError(
                 ErrorType.FORBIDDEN,
-                "Only INSERT/UPSERT statements targeting the AgentMemory store are "
-                "permitted on the memory write path.",
+                "Only INSERT/UPSERT statements targeting the AgentMemory store (or its "
+                "exact bootstrap DDL) are permitted on the memory write path.",
             )
         form = self._build_query_form(
             statement,

@@ -123,7 +123,19 @@ so revalidation keeps them honest), and error classes that repeat without a
 recorded success become caution notes. On the HTTP transport the gateway can
 run that pass itself — set `ASTERIXDB_MCP_DISTILL_INTERVAL_S` (seconds, with
 memory writes enabled) and consolidation happens on an interval with no
-operator involvement. `scripts/memory_migrate_labels.py` is a one-time
+operator involvement.
+
+With memory writes enabled, the gateway also runs a bounded **startup
+maintenance pass** on every launch (any transport): it creates the AgentMemory
+store if absent (only the exact canonical `IF NOT EXISTS` DDL is allowed
+through the write guard, byte-for-byte), re-walks `okf_catalog()` so the
+concept store tracks schema changes automatically (idempotent — an unchanged
+catalog writes nothing; overlays always survive), and runs one distill pass.
+Concurrent gateway instances elect a single runner via an exclusive lock file
+(0600, stale-broken after 10 minutes), the whole pass is capped at 60 seconds,
+and every step degrades gracefully — a cluster without `okf_catalog()` simply
+skips the walk. Disable with `ASTERIXDB_MCP_AUTO_MAINTENANCE_ENABLED=false`.
+End-user effect: install, point at a cluster, done — no scripts, no cron. `scripts/memory_migrate_labels.py` is a one-time
 migration that labels overlay notes written before evidence labels existed as
 `(unverified)`, so legacy claims stop reading as verified fact.
 

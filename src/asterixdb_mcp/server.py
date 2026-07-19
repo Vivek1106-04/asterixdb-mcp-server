@@ -1367,8 +1367,16 @@ def main() -> None:
 
     stdio (the default) runs the local sidecar. http serves the Streamable HTTP
     transport — with a /health probe and optional bearer auth — via uvicorn.
+    A bounded startup-maintenance pass (store bootstrap, catalog walk, one
+    distill) runs first so end users never run scripts by hand; it is gated,
+    single-flighted, and can never prevent the gateway from serving.
     """
+    import asyncio
+
+    from .maintenance import run_startup_maintenance
+
     settings = load_settings()
+    asyncio.run(run_startup_maintenance(settings))
     server = build_server(settings)
     if settings.transport == "http":
         _serve_http(server, settings)
