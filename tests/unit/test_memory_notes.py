@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs
 
+import httpx
 import pytest
 
 from asterixdb_mcp.config import Settings
@@ -147,16 +148,63 @@ def test_render_notes_formats_subject_and_note() -> None:
     assert rendered == "- [A.B] n1\n- [C.D] n2"
 
 
-def test_recall_state_first_use_claims_once() -> None:
+def test_recall_state_fresh_filters_marked_subjects() -> None:
     state = RecallState()
-    assert state.claim(["ShopDV.orders"], first_use_only=True) == ["ShopDV.orders"]
-    assert state.claim(["ShopDV.orders"], first_use_only=True) == []
+    assert state.fresh(["ShopDV.orders"]) == ["ShopDV.orders"]
+    state.mark(["ShopDV.orders"])
+    assert state.fresh(["ShopDV.orders", "HR.employees"]) == ["HR.employees"]
 
 
-def test_recall_state_without_first_use_returns_all_but_marks() -> None:
+async def test_recall_marks_only_subjects_whose_notes_were_delivered(
+    settings: Settings,
+) -> None:
+    # First query: the dataset has no notes yet, so the subject must stay
+    # fresh; a note written later in the session still surfaces on the next
+    # query, and only then is the subject marked as delivered.
+    note_row = {"subject": "ShopDV.orders", "type": "Note", "text": "amount is a string"}
+    responses = iter([[], [note_row], [note_row]])
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": next(responses)})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    base = ToolResult(text="ok", structured={"status": "success"})
     state = RecallState()
-    assert state.claim(["HR.employees"], first_use_only=False) == ["HR.employees"]
-    assert state.claim(["HR.employees"], first_use_only=True) == []
+    stmt = "SELECT * FROM ShopDV.orders o;"
+
+    first = await attach_statement_notes(
+        cap.client, "ccid", stmt, base, recall=state, first_use_only=True
+    )
+    assert first is base  # no notes delivered -> not marked
+
+    second = await attach_statement_notes(
+        cap.client, "ccid", stmt, base, recall=state, first_use_only=True
+    )
+    assert "amount is a string" in second.text  # later-written note surfaces
+
+    third = await attach_statement_notes(
+        cap.client, "ccid", stmt, base, recall=state, first_use_only=True
+    )
+    assert third is base  # delivered once -> deduped for the session
+
+
+async def test_error_path_attaches_every_time_but_marks_delivery(settings: Settings) -> None:
+    note_row = {"subject": "HR.employees", "type": "Note", "text": "salary is in cents"}
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": [note_row]})
+    base = ToolResult(text="failed", structured={}, is_error=True)
+    state = RecallState()
+    stmt = "SELECT * FROM HR.employees e;"
+
+    attached = await attach_statement_notes(
+        cap.client, "ccid", stmt, base, recall=state, first_use_only=False
+    )
+    assert "salary is in cents" in attached.text
+
+    ok = ToolResult(text="ok", structured={"status": "success"})
+    deduped = await attach_statement_notes(
+        cap.client, "ccid", stmt, ok, recall=state, first_use_only=True
+    )
+    assert deduped is ok  # the failure already delivered these notes
 
 
 def test_render_notes_labels_evidence_status() -> None:

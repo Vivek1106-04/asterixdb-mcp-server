@@ -10,7 +10,9 @@ layer-aware, mirroring the refresh pipeline:
   (the walk-owned core is never touched); the current row is superseded and
   re-inserted with the annotation appended,
 - existing note         -> replaced bi-temporally (superseded, re-inserted),
-- text already present  -> no-op.
+- text already present  -> no-op, UNLESS the rewrite adds a ``source_query`` an
+  unverified copy lacked — that upgrade re-grounds the note instead of deduping
+  the evidence away.
 
 Corrections: overlay annotations are otherwise append-only, so a contradicted
 note would sit next to its correction forever. Passing ``replaces`` retires
@@ -217,7 +219,14 @@ def _reconcile(
         core = str(existing.get("core") or existing.get("text", ""))
         overlay = str(existing.get("overlay") or "")
         kept, retired = _retire_overlay_blocks(overlay, replaces)
-        if retired == 0 and note in overlay:
+        action = "annotated"
+        unverified_form = f"(unverified) {note}"
+        if source_query and any(unverified_form in block for block in kept):
+            # Re-grounding: the same note arriving WITH evidence upgrades the
+            # stored unverified line instead of deduping the evidence away.
+            kept = [block.replace(unverified_form, note) for block in kept]
+            action = "regrounded"
+        elif retired == 0 and note in overlay:
             return "unchanged", {}, 0
         if not any(note in block for block in kept):
             # Overlay lines carry their evidence status inline so auto-recall
@@ -225,7 +234,7 @@ def _reconcile(
             kept = [*kept, note if source_query else f"(unverified) {note}"]
         new_overlay = "\n\n".join(kept) + "\n"
         return (
-            "annotated",
+            action,
             {
                 **existing,
                 "id": f"{subject}@{now}",
@@ -238,6 +247,21 @@ def _reconcile(
             retired,
         )
     if str(existing.get("text", "")).strip() == note:
+        if source_query and not existing.get("source_query"):
+            # Same standalone note now backed by evidence: supersede with the
+            # source_query attached rather than discarding the grounding.
+            return (
+                "regrounded",
+                {
+                    **existing,
+                    "id": f"{subject}@{now}",
+                    "valid_from": now,
+                    "trust": 1.0,
+                    "last_used": now,
+                    **optional,
+                },
+                0,
+            )
         return "unchanged", {}, 0
     return (
         "superseded",

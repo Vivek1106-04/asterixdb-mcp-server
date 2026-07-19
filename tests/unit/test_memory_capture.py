@@ -9,10 +9,13 @@ from urllib.parse import parse_qs
 import pytest
 
 from asterixdb_mcp.config import Settings
+from asterixdb_mcp.errors import ErrorType, GatewayError
+from asterixdb_mcp.tools import ToolResult
 from asterixdb_mcp.tools.memory_capture import (
     MAX_CAPTURED_STATEMENT_LEN,
     CaptureState,
     _trim,
+    capture_error_signal,
     capture_query_outcome,
 )
 from tests.conftest import make_capturing_cc
@@ -84,7 +87,9 @@ async def test_capture_persists_fix_note_through_memory_write(settings: Settings
     await capture_query_outcome(
         cap.client, settings, state, statement=FAIL, result_error="QUERY_ERROR"
     )
-    assert cap.requests == []  # a failure alone writes nothing
+    # a failure alone writes no NOTE; only its episodic event is recorded
+    statements = [parse_qs(r.content.decode())["statement"][0] for r in cap.requests]
+    assert all(s.startswith("INSERT INTO AgentMemory.SessionEvent") for s in statements)
     await capture_query_outcome(cap.client, settings, state, statement=FIX, result_error=None)
 
     # memory_write path: current-row lookup, then the INSERT of the new note.
@@ -135,3 +140,135 @@ async def test_captured_fix_note_is_grounded_by_working_statement(settings: Sett
     await capture_query_outcome(cap.client, settings, state, statement=FIX, result_error=None)
     row = json.loads(parse_qs(cap.requests[-1].content.decode())["$row"][0])
     assert row["source_query"] == FIX
+
+
+# capture_error_signal
+
+
+def test_error_signal_from_classified_error() -> None:
+    result = ToolResult.error(GatewayError(ErrorType.SYNTAX_ERROR, "boom"))
+    assert capture_error_signal(result) == ErrorType.SYNTAX_ERROR.value
+
+
+def test_error_signal_error_without_type_is_none() -> None:
+    assert capture_error_signal(ToolResult(text="x", structured={}, is_error=True)) is None
+
+
+def test_error_signal_zero_rows_with_warnings_is_semantic() -> None:
+    result = ToolResult(
+        text="ok",
+        structured={
+            "status": "success",
+            "rowsReturned": 0,
+            "warnings": [{"code": 1, "msg": "ASX0002: Type mismatch: scan-collection"}],
+        },
+    )
+    expected = "SEMANTIC_WARNING: ASX0002: Type mismatch: scan-collection"
+    assert capture_error_signal(result) == expected
+
+
+def test_error_signal_handles_string_warnings() -> None:
+    result = ToolResult(
+        text="ok", structured={"rowsReturned": 0, "warnings": ["plain warning"]}
+    )
+    assert capture_error_signal(result) == "SEMANTIC_WARNING: plain warning"
+
+
+def test_error_signal_none_for_true_success_or_plain_empty() -> None:
+    assert capture_error_signal(ToolResult(text="ok", structured={"rowsReturned": 5})) is None
+    assert capture_error_signal(ToolResult(text="ok", structured={"rowsReturned": 0})) is None
+
+
+# session events: cluster record, offline buffer, flush
+
+
+async def test_event_recorded_on_cluster_when_writes_enabled(
+    settings: Settings, tmp_path: Path
+) -> None:
+    settings = settings.model_copy(
+        update={"memory_write_enabled": True, "session_log_dir": str(tmp_path)}
+    )
+    cap = make_capturing_cc(settings)
+    await capture_query_outcome(
+        cap.client, settings, CaptureState(), statement=FIX, result_error=None
+    )
+    form = parse_qs(cap.requests[0].content.decode())
+    assert form["statement"][0].startswith("INSERT INTO AgentMemory.SessionEvent")
+    event = json.loads(form["$row"][0])
+    assert event["outcome"] == "success" and event["session"] == "sess-test" and event["id"]
+    # cluster reachable -> nothing buffered on disk
+    assert not (tmp_path / f"{settings.agent_session_id}.jsonl").exists()
+
+
+async def test_event_falls_back_to_jsonl_when_cluster_unreachable(
+    settings: Settings, tmp_path: Path
+) -> None:
+    settings = settings.model_copy(
+        update={"memory_write_enabled": True, "session_log_dir": str(tmp_path)}
+    )
+    cap = make_capturing_cc(
+        settings,
+        response_json={"status": "fatal", "errors": [{"code": 1, "msg": "CC down"}]},
+        status_code=500,
+    )
+    await capture_query_outcome(
+        cap.client, settings, CaptureState(), statement=FAIL, result_error="QUERY_ERROR"
+    )
+    log = tmp_path / f"{settings.agent_session_id}.jsonl"
+    events = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [e["outcome"] for e in events] == ["error"]
+    assert events[0]["error"] == "QUERY_ERROR"
+
+
+async def test_buffered_events_flush_on_next_successful_write(
+    settings: Settings, tmp_path: Path
+) -> None:
+    settings = settings.model_copy(
+        update={"memory_write_enabled": True, "session_log_dir": str(tmp_path)}
+    )
+    log = tmp_path / f"{settings.agent_session_id}.jsonl"
+    log.write_text(
+        json.dumps({"session": "sess-test", "ts": 1.0, "statement": FIX, "outcome": "success"})
+        + "\nnot json\n[1,2]\n"
+    )
+    cap = make_capturing_cc(settings)
+    await capture_query_outcome(
+        cap.client, settings, CaptureState(), statement=FIX, result_error=None
+    )
+    # live event insert + one replayed buffered event; buffer removed
+    forms = [parse_qs(r.content.decode()) for r in cap.requests]
+    assert all(f["statement"][0].startswith("INSERT INTO AgentMemory.SessionEvent") for f in forms)
+    assert len(forms) == 2
+    replayed = json.loads(forms[1]["$row"][0])
+    assert replayed["ts"] == 1.0 and replayed["id"]  # id backfilled on replay
+    assert not log.exists()
+
+
+async def test_flush_survives_unreadable_buffer(settings: Settings, tmp_path: Path) -> None:
+    settings = settings.model_copy(
+        update={"memory_write_enabled": True, "session_log_dir": str(tmp_path)}
+    )
+    # the buffer path exists but is a directory: read_text raises OSError
+    (tmp_path / f"{settings.agent_session_id}.jsonl").mkdir()
+    cap = make_capturing_cc(settings)
+    await capture_query_outcome(
+        cap.client, settings, CaptureState(), statement=FIX, result_error=None
+    )
+    assert len(cap.requests) == 1  # live event recorded; flush degraded silently
+
+
+async def test_flush_survives_undeletable_buffer(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = settings.model_copy(
+        update={"memory_write_enabled": True, "session_log_dir": str(tmp_path)}
+    )
+    log = tmp_path / f"{settings.agent_session_id}.jsonl"
+    event = {"session": "s", "ts": 2.0, "statement": FIX, "outcome": "success"}
+    log.write_text(json.dumps(event) + "\n")
+    monkeypatch.setattr(Path, "unlink", lambda self: (_ for _ in ()).throw(OSError("busy")))
+    cap = make_capturing_cc(settings)
+    await capture_query_outcome(
+        cap.client, settings, CaptureState(), statement=FIX, result_error=None
+    )
+    assert len(cap.requests) == 2  # live + replayed; failed unlink swallowed

@@ -94,9 +94,19 @@ class Settings(BaseSettings):
     )
     session_log_dir: str | None = Field(
         default=None,
-        description="Directory for per-session JSONL query-outcome logs, the episodic "
-        "record that scripts/memory_distill.py distills into memory offline. Unset "
-        "disables session logging.",
+        description="Directory for per-session JSONL query-outcome logs. With memory "
+        "writes enabled these files are only the offline buffer (events land in "
+        "AgentMemory.SessionEvent and buffered lines are flushed there); otherwise "
+        "they are the episodic record scripts/memory_distill.py distills offline. "
+        "Unset disables file logging.",
+    )
+    distill_interval_s: float = Field(
+        default=0,
+        ge=0,
+        description="HTTP transport only: run an automatic distill pass over "
+        "AgentMemory.SessionEvent every this many seconds, making cross-session "
+        "consolidation zero-effort. 0 (the default) disables the loop; it also "
+        "requires memory_write_enabled.",
     )
 
     # Egress ceilings (4-layer guardrails)
