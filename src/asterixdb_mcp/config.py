@@ -100,6 +100,13 @@ class Settings(BaseSettings):
         "they are the episodic record scripts/memory_distill.py distills offline. "
         "Unset disables file logging.",
     )
+    auto_maintenance_enabled: bool = Field(
+        default=True,
+        description="Run the bounded startup maintenance pass (store bootstrap, "
+        "catalog walk, one distill) when the gateway starts. Only acts together "
+        "with memory_write_enabled; single-flighted across concurrent gateway "
+        "instances via a lock file.",
+    )
     distill_interval_s: float = Field(
         default=0,
         ge=0,

@@ -79,3 +79,27 @@ def test_serve_http_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     assert recorded["host"] == "127.0.0.1"
     assert recorded["port"] == 19200
     assert recorded["app"] is not None
+
+
+def test_main_runs_startup_maintenance_before_serving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from asterixdb_mcp import maintenance as maintenance_module
+
+    settings = Settings(cc_base_url="http://test-cc:19002")
+    order: list[str] = []
+
+    async def fake_maintenance(passed: Settings) -> None:
+        assert passed is settings
+        order.append("maintenance")
+
+    class FakeServer:
+        def run(self) -> None:
+            order.append("serve")
+
+    monkeypatch.setattr(server_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(server_module, "build_server", lambda passed: FakeServer())
+    monkeypatch.setattr(maintenance_module, "run_startup_maintenance", fake_maintenance)
+
+    server_module.main()
+    assert order == ["maintenance", "serve"]

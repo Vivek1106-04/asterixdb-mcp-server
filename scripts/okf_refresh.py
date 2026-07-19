@@ -44,38 +44,43 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-KIND = "semantic"
-# the store itself must not be part of the knowledge it stores
-SELF_DATAVERSE = "AgentMemory"
+SRC = str(Path(__file__).resolve().parents[1] / "src")
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
+
+# The pure reconcile core and canonical store constants are shared with the
+# gateway's automatic startup walk (asterixdb_mcp.okf_walk); this script adds
+# the full pipeline on top: grounding, revalidation, scoped refreshes.
+from asterixdb_mcp.okf_walk import (  # noqa: E402
+    BOOTSTRAP_STATEMENTS,
+    CURRENT_ROWS_QUERY,
+    KIND,
+    SELF_DATAVERSE,
+    WALK_QUERY,
+    merge_layers,  # noqa: F401  (re-exported: tests and bundles import via this module)
+    reconcile,
+    reground_overlay,  # noqa: F401  (re-exported)
+)
+from asterixdb_mcp.okf_walk import (  # noqa: E402
+    in_scope as _in_scope,
+)
+from asterixdb_mcp.okf_walk import (  # noqa: E402
+    walk_owned as _walk_owned,  # noqa: F401  (re-exported)
+)
+
 # stamped on every statement the pipeline itself runs so the walk's workload
 # mining never echoes pipeline plumbing back into the concept docs
 PIPELINE_MARKER = "/*okf*/"
 DATASET_CONCEPT_TYPES = ("AsterixDB Dataset", "AsterixDB External Dataset", "AsterixDB View")
 MAX_ADVISED_STATEMENTS = 3
-
-BOOTSTRAP_STATEMENTS = (
-    "CREATE DATAVERSE AgentMemory IF NOT EXISTS;",
-    "CREATE TYPE AgentMemory.MemoryType IF NOT EXISTS AS OPEN { id: string };",
-    "CREATE DATASET AgentMemory.Memory(MemoryType) IF NOT EXISTS PRIMARY KEY id;",
-    "CREATE INDEX memSubject IF NOT EXISTS ON AgentMemory.Memory(subject: string?) ENFORCED;",
-    "CREATE INDEX memText IF NOT EXISTS ON AgentMemory.Memory(`text`: string?) TYPE FULLTEXT ENFORCED;",
-    # episodic query-outcome events the gateway records for distillation
-    "CREATE TYPE AgentMemory.SessionEventType IF NOT EXISTS AS OPEN { id: string };",
-    "CREATE DATASET AgentMemory.SessionEvent(SessionEventType) IF NOT EXISTS PRIMARY KEY id;",
-)
-
-WALK_QUERY = 'SET `import-private-functions` "true"; SELECT VALUE c FROM okf_catalog({args}) c;'
-CURRENT_ROWS_QUERY = (
-    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
-)
 
 
 def execute(cc: str, statement: str) -> dict[str, Any]:
@@ -117,113 +122,6 @@ def fetch_bundle(cc: str, dataverse: str | None) -> dict[str, dict[str, Any]]:
 def fetch_current(cc: str) -> dict[str, dict[str, Any]]:
     rows = execute(cc, CURRENT_ROWS_QUERY.format(kind=KIND)).get("results", [])
     return {row["subject"]: row for row in rows if isinstance(row, dict) and "subject" in row}
-
-
-_BACKTICKED = re.compile(r"`([^`]+)`")
-
-
-def merge_layers(core: str, overlay: str) -> str:
-    """Render one concept document from its two layers; the split is invisible."""
-    if not overlay:
-        return core
-    return core.rstrip("\n") + "\n\n" + overlay.rstrip("\n") + "\n"
-
-
-def reground_overlay(overlay: str, old_core: str, new_core: str) -> tuple[str, list[str]]:
-    """Re-ground overlay claims against a refreshed core.
-
-    A claim (line) that backtick-references a schema element which existed in
-    the old core but is gone from the new core no longer holds and is dropped;
-    the superseded row keeps it as history. References that never resolved
-    against the core (business terms, external names) are left alone.
-
-    Returns (kept_overlay, dropped_lines).
-    """
-    if not overlay:
-        return "", []
-    kept: list[str] = []
-    dropped: list[str] = []
-    for line in overlay.splitlines():
-        stale = [
-            ref for ref in _BACKTICKED.findall(line) if ref in old_core and ref not in new_core
-        ]
-        (dropped if stale else kept).append(line)
-    text = "\n".join(kept).strip("\n")
-    return (text + "\n" if text else ""), dropped
-
-
-def reconcile(
-    bundle: dict[str, dict[str, Any]],
-    current: dict[str, dict[str, Any]],
-    now: str,
-    scope: str | None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
-    """Pure reconcile: returns (rows_to_insert, rows_to_supersede, unchanged_count).
-
-    Layer-aware: an incoming doc's ``text`` (or explicit ``core``) is the new
-    deterministic core. Walk docs carry no ``overlay`` key, so the stored
-    overlay is carried forward, re-grounded against the new core; import docs
-    carry an explicit ``overlay``. Stored rows keep ``core`` and ``overlay``
-    apart, with ``text`` as the merged rendering. Pre-layering rows (no
-    ``core`` field) fall back to comparing ``text``.
-    """
-    inserts: list[dict[str, Any]] = []
-    supersede: list[dict[str, Any]] = []
-    unchanged = 0
-
-    for subject, doc in bundle.items():
-        existing = current.get(subject)
-        new_core = str(doc.get("core", doc.get("text", "")))
-        incoming_overlay = doc.get("overlay")
-        if existing is not None:
-            old_core = str(existing.get("core") or existing.get("text", ""))
-            old_overlay = str(existing.get("overlay") or "")
-            if incoming_overlay is None:
-                overlay, _ = reground_overlay(old_overlay, old_core, new_core)
-            else:
-                overlay = str(incoming_overlay)
-            if new_core == old_core and overlay == old_overlay:
-                unchanged += 1
-                continue
-            supersede.append({**existing, "valid_to": now})
-        else:
-            overlay = str(incoming_overlay or "")
-        row = {key: value for key, value in doc.items() if key not in ("core", "overlay", "text")}
-        row.update(
-            id=f"{subject}@{now}",
-            kind=KIND,
-            valid_from=now,
-            core=new_core,
-            text=merge_layers(new_core, overlay),
-        )
-        if overlay:
-            row["overlay"] = overlay
-        inserts.append(row)
-
-    for subject, existing in current.items():
-        if subject in bundle or not _walk_owned(existing):
-            continue
-        if scope is None or _in_scope(subject, scope):
-            supersede.append({**existing, "valid_to": now})
-    return inserts, supersede, unchanged
-
-
-def _walk_owned(row: dict[str, Any]) -> bool:
-    """Only rows the catalog walk emits may be superseded as *vanished*.
-
-    Imported or conversation-distilled concepts are never in the walk bundle,
-    so without this guard every full refresh would supersede them wholesale.
-    """
-    return str(row.get("type", "")).startswith("AsterixDB ")
-
-
-def _in_scope(subject: str, dataverse: str) -> bool:
-    """A scoped refresh must only supersede that dataverse's vanished concepts."""
-    return (
-        subject == dataverse
-        or subject.startswith(dataverse + ".")
-        or subject.startswith(dataverse + "/")
-    )
 
 
 def apply(cc: str, inserts: list[dict[str, Any]], supersede: list[dict[str, Any]]) -> None:
