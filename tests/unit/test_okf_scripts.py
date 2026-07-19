@@ -464,3 +464,99 @@ def test_distill_write_note_unchanged_writes_nothing(monkeypatch):
 
     monkeypatch.setattr(memory_distill, "execute", fake_execute)
     assert memory_distill.write_note("http://cc", "DV.a", "note") == "unchanged"
+
+
+def test_distill_load_cluster_events_degrades_to_empty(monkeypatch):
+    def boom(cc, statement):
+        raise RuntimeError("cluster down")
+
+    monkeypatch.setattr(memory_distill, "execute", boom)
+    assert memory_distill.load_cluster_events("http://cc") == []
+
+
+def test_distill_load_cluster_events_returns_rows(monkeypatch):
+    rows = [{"id": "e1", "outcome": "success"}, "not-a-dict"]
+
+    def fake_execute(cc, statement):
+        assert "SessionEvent" in statement
+        return {"results": rows}
+
+    monkeypatch.setattr(memory_distill, "execute", fake_execute)
+    assert memory_distill.load_cluster_events("http://cc") == [{"id": "e1", "outcome": "success"}]
+
+
+# memory_migrate_labels.py
+
+import memory_migrate_labels  # noqa: E402
+
+
+def test_migrate_overlay_prefixes_only_unmarked_blocks():
+    overlay = (
+        "The categories field is an array of strings.\n\n"
+        "A query on this dataset failed (SYNTAX_ERROR): bad | working form: good\n\n"
+        "Proven query, used successfully in 2 sessions: SELECT 1;\n\n"
+        "(unverified) already labeled\n"
+    )
+    migrated, changed = memory_migrate_labels.migrate_overlay(overlay)
+    assert changed == 1
+    assert migrated.startswith("(unverified) The categories field")
+    assert "| working form: good" in migrated
+    assert "(unverified) A query" not in migrated
+    assert "(unverified) Proven query" not in migrated
+    assert migrated.count("(unverified)") == 2
+
+
+def test_migrate_overlay_empty_is_noop():
+    assert memory_migrate_labels.migrate_overlay("   \n") == ("", 0)
+
+
+def test_migrate_rewrite_row_supersedes_bitemporally(monkeypatch):
+    statements = []
+
+    def fake_execute(cc, statement):
+        statements.append(statement)
+        return {"results": []}
+
+    monkeypatch.setattr(memory_migrate_labels, "execute", fake_execute)
+    row = {
+        "id": "DV.a@t0",
+        "subject": "DV.a",
+        "type": "AsterixDB Dataset",
+        "core": "core",
+        "overlay": "claim\n",
+        "text": "core\n\nclaim\n",
+        "valid_from": "t0",
+    }
+    memory_migrate_labels.rewrite_row("http://cc", row, "(unverified) claim\n")
+    assert statements[0].startswith("UPSERT INTO AgentMemory.Memory")
+    assert '"valid_to"' in statements[0]
+    assert statements[1].startswith("INSERT INTO AgentMemory.Memory")
+    assert "(unverified) claim" in statements[1]
+
+
+def test_migrate_main_reports_and_respects_dry_run(monkeypatch, capsys):
+    row = {
+        "id": "DV.a@t0",
+        "subject": "DV.a",
+        "type": "AsterixDB Dataset",
+        "core": "core",
+        "overlay": "claim\n",
+        "text": "core\n\nclaim\n",
+    }
+    clean = {**row, "id": "DV.b@t0", "subject": "DV.b", "overlay": ""}
+    statements = []
+
+    def fake_execute(cc, statement):
+        statements.append(statement)
+        return {"results": [row, clean, "junk"]}
+
+    monkeypatch.setattr(memory_migrate_labels, "execute", fake_execute)
+    monkeypatch.setattr(sys, "argv", ["memory_migrate_labels.py", "--dry-run"])
+    assert memory_migrate_labels.main() == 0
+    out = capsys.readouterr().out
+    assert "1 concepts with 1 unmarked block(s)" in out
+    assert len(statements) == 1  # only the SELECT; dry-run writes nothing
+
+    monkeypatch.setattr(sys, "argv", ["memory_migrate_labels.py"])
+    assert memory_migrate_labels.main() == 0
+    assert any(s.startswith("INSERT INTO AgentMemory.Memory") for s in statements)

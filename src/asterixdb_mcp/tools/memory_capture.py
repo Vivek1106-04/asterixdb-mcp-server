@@ -8,28 +8,44 @@ so duplicates no-op, catalog concepts get overlay annotations, and history
 stays bi-temporal. No model involvement — capture happens whether or not the
 client ever calls memory_write.
 
-When a session log directory is configured, every query outcome is also
-appended as one JSONL event, giving scripts/memory_distill.py the raw
-episodic record to distill cross-session knowledge from offline.
+Failure means more than a raised error: a query that compiles, runs, and
+returns 0 rows WITH type-mismatch warnings silently failed (the classic
+UNNEST-a-string miss), so ``capture_error_signal`` treats that as a failure
+signal too.
 
-Capture is best-effort throughout: a failed note write or an unwritable log
-never surfaces to the caller.
+Every query outcome is also recorded as one episodic event for offline
+distillation (scripts/memory_distill.py and the gateway's own auto-distill):
+into ``AgentMemory.SessionEvent`` on the cluster when memory writes are
+enabled, with the session-log JSONL file as the offline buffer — events that
+could not reach the cluster are appended there and flushed on the next
+successful cluster write.
+
+Capture is best-effort throughout: a failed note write, an unreachable
+cluster, or an unwritable log never surfaces to the caller.
 """
 
 from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..cc_client import CCClient
 from ..config import Settings
+from ..context_id import make_client_context_id
+from ..errors import GatewayError
+from . import ToolResult
 from .memory_notes import subjects_from_statement
 from .memory_write import run_memory_write
 
 MAX_CAPTURED_STATEMENT_LEN = 300
+MAX_WARNING_LEN = 200
+
+SESSION_EVENT_DATASET = "AgentMemory.SessionEvent"
+_EVENT_INSERT = f"INSERT INTO {SESSION_EVENT_DATASET} ([$row]);"
 
 
 @dataclass
@@ -59,6 +75,25 @@ class CaptureState:
         return captured
 
 
+def capture_error_signal(result: ToolResult) -> str | None:
+    """The failure signal of a query result, or None when it truly succeeded.
+
+    A raised error carries its classified errorType. A "successful" result
+    with zero rows AND compiler warnings is a silent semantic miss — the query
+    ran but computed nothing — and is surfaced as a SEMANTIC_WARNING signal so
+    capture can pair it with the later working form.
+    """
+    structured = result.structured or {}
+    if result.is_error:
+        return str(structured.get("errorType")) if structured.get("errorType") else None
+    warnings = structured.get("warnings")
+    if structured.get("rowsReturned") == 0 and warnings:
+        first = warnings[0]
+        msg = str(first.get("msg", "")) if isinstance(first, dict) else str(first)
+        return f"SEMANTIC_WARNING: {msg[:MAX_WARNING_LEN]}"
+    return None
+
+
 async def capture_query_outcome(
     client: CCClient,
     settings: Settings,
@@ -68,7 +103,7 @@ async def capture_query_outcome(
     result_error: str | None,
 ) -> None:
     """Feed one query outcome through capture and persist any distilled notes."""
-    _append_session_event(settings, statement, result_error)
+    await _record_session_event(client, settings, statement, result_error)
     if not settings.memory_write_enabled:
         return
     for subject, note in capture.record(statement, result_error):
@@ -92,10 +127,12 @@ def _trim(statement: str) -> str:
     return flat[:MAX_CAPTURED_STATEMENT_LEN] + "..."
 
 
-def _append_session_event(settings: Settings, statement: str, result_error: str | None) -> None:
-    if not settings.session_log_dir:
-        return
+# episodic session events
+
+
+def _build_event(settings: Settings, statement: str, result_error: str | None) -> dict[str, Any]:
     event: dict[str, Any] = {
+        "id": f"{settings.agent_session_id}@{time.time()}-{uuid.uuid4().hex[:8]}",
         "ts": time.time(),
         "session": settings.agent_session_id,
         "statement": statement,
@@ -103,11 +140,72 @@ def _append_session_event(settings: Settings, statement: str, result_error: str 
     }
     if result_error is not None:
         event["error"] = result_error
+    return event
+
+
+async def _record_session_event(
+    client: CCClient, settings: Settings, statement: str, result_error: str | None
+) -> None:
+    """Record one episodic event: cluster first, JSONL buffer as the fallback."""
+    event = _build_event(settings, statement, result_error)
+    if settings.memory_write_enabled:
+        try:
+            await _insert_event(client, settings, event)
+            await _flush_buffered_events(client, settings)
+            return
+        except GatewayError:
+            pass
+    _append_jsonl_event(settings, event)
+
+
+async def _insert_event(client: CCClient, settings: Settings, event: dict[str, Any]) -> None:
+    ccid = make_client_context_id(settings.agent_session_id, "session_event")
+    await client.execute_memory_write(
+        _EVENT_INSERT, client_context_id=ccid, statement_parameters={"row": event}
+    )
+
+
+async def _flush_buffered_events(client: CCClient, settings: Settings) -> None:
+    """Replay events buffered while the cluster was unreachable, then drop the buffer.
+
+    A failure mid-flush leaves the remaining lines in place for the next attempt;
+    duplicate replays are tolerable because distillation deduplicates by event id.
+    """
+    path = _buffer_path(settings)
+    if path is None or not path.exists():
+        return
     try:
-        log_dir = Path(settings.session_log_dir)
-        log_dir.mkdir(parents=True, exist_ok=True)
-        path = log_dir / f"{settings.agent_session_id}.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event.setdefault("id", f"{event.get('session', 'buffered')}@{uuid.uuid4().hex[:8]}")
+        await _insert_event(client, settings, event)
+    try:
+        path.unlink()
+    except OSError:
+        return
+
+
+def _append_jsonl_event(settings: Settings, event: dict[str, Any]) -> None:
+    path = _buffer_path(settings)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(event) + "\n")
     except OSError:
         return
+
+
+def _buffer_path(settings: Settings) -> Path | None:
+    if not settings.session_log_dir:
+        return None
+    return Path(settings.session_log_dir) / f"{settings.agent_session_id}.jsonl"

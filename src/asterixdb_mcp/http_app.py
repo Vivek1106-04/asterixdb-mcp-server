@@ -27,11 +27,14 @@ egress (``readonly=true`` on every CC query).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import cast
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -40,7 +43,9 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .artifacts import resolve_artifact_file
+from .cc_client import CCClient
 from .config import ARTIFACTS_PATH_PREFIX, HEALTH_PATH, Settings
+from .distill import run_distill
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +130,43 @@ def _authorization_header(scope: Scope) -> str | None:
     return None
 
 
+async def _distill_loop(client: CCClient, settings: Settings) -> None:
+    """Periodic auto-distill: consolidate session events into memory notes.
+
+    Runs only inside the long-lived HTTP gateway (stdio instances are ephemeral
+    and would race each other). Any single failed pass is logged and survived.
+    """
+    while True:
+        await asyncio.sleep(settings.distill_interval_s)
+        try:
+            summary = await run_distill(client, settings)
+            logger.info("auto-distill: %s", summary)
+        except Exception:  # the loop must outlive any one bad pass
+            logger.exception("auto-distill pass failed")
+
+
+def _install_auto_distill(app: Starlette, settings: Settings) -> None:
+    """Wrap the app lifespan so the distill loop starts and stops with the server."""
+    original = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def lifespan(scoped_app: Starlette) -> AsyncIterator[None]:
+        async with original(scoped_app):
+            http = httpx.AsyncClient(
+                base_url=settings.cc_base_url, timeout=settings.request_timeout_s
+            )
+            task = asyncio.create_task(_distill_loop(CCClient(settings, http), settings))
+            try:
+                yield
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                await http.aclose()
+
+    app.router.lifespan_context = lifespan
+
+
 def build_http_app(mcp: FastMCP, settings: Settings) -> Starlette:
     """Build the Streamable HTTP ASGI app: MCP endpoint, ``/health``, and auth.
 
@@ -144,6 +186,9 @@ def build_http_app(mcp: FastMCP, settings: Settings) -> Starlette:
             methods=["GET"],
         )
     )
+
+    if settings.distill_interval_s > 0 and settings.memory_write_enabled:
+        _install_auto_distill(app, settings)
 
     if settings.auth_mode == "bearer":
         # api_key presence/length is guaranteed by validate_http_security.

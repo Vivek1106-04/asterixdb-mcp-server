@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from asterixdb_mcp.config import Settings
@@ -267,8 +268,6 @@ async def test_columnar_full_scan_flagged_run_and_minimized(settings: Settings) 
 
 async def test_failed_query_carries_learned_notes_for_its_datasets(settings: Settings) -> None:
     from urllib.parse import parse_qs
-
-    import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
         stmt = parse_qs(request.content.decode())["statement"][0]

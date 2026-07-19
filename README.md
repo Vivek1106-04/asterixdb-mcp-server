@@ -98,9 +98,10 @@ connected context along the concept link graph.
 note bi-temporally — new subjects become standalone note concepts, notes on
 catalog concepts land in the learned overlay and survive refreshes. It is off
 by default (`ASTERIXDB_MCP_MEMORY_WRITE_ENABLED=true` enables it) and the CC
-client refuses anything on that path except INSERT/UPSERT into
-`AgentMemory.Memory`; every other statement the gateway issues stays
-`readonly=true`. `scripts/memory_eval.py` measures the memory layer on four
+client refuses anything on that path except INSERT/UPSERT into the
+`AgentMemory` store (the `Memory` concept dataset and the insert-only
+`SessionEvent` episodic record); every other statement the gateway issues
+stays `readonly=true`. `scripts/memory_eval.py` measures the memory layer on four
 axes — recall (hit@k, MRR), forgetting (stale-recall rate), context
 compression, and reuse of stored query patterns — from a JSONL case file, so
 retrieval changes are tuned against numbers rather than asserted.
@@ -109,12 +110,22 @@ Capture is automatic as well as agent-curated. The gateway watches its own
 query outcomes: when a statement against a dataset fails and a later statement
 against the same dataset succeeds in the same session, the error->fix pair is
 distilled into a learned note on that dataset's concept — no model involvement
-(requires memory writes enabled). With `ASTERIXDB_MCP_SESSION_LOG_DIR` set,
-every query outcome is also appended to a per-session JSONL log, and
-`scripts/memory_distill.py` distills the cross-session signal offline: queries
-proven across sessions become grounded notes (their statement is stored as
-`source_query`, so revalidation keeps them honest), and error classes that
-repeat without a recorded success become caution notes.
+(requires memory writes enabled). Failure means more than a raised error: a
+query that runs but returns 0 rows WITH type-mismatch warnings is treated as a
+silent semantic miss and captured the same way. Every query outcome is also
+recorded as one episodic event — into `AgentMemory.SessionEvent` on the
+cluster when memory writes are enabled, with the per-session JSONL file under
+`ASTERIXDB_MCP_SESSION_LOG_DIR` acting as the offline buffer (buffered events
+flush to the cluster on the next successful write). `scripts/memory_distill.py`
+distills the cross-session signal from both sources: queries proven across
+sessions become grounded notes (their statement is stored as `source_query`,
+so revalidation keeps them honest), and error classes that repeat without a
+recorded success become caution notes. On the HTTP transport the gateway can
+run that pass itself — set `ASTERIXDB_MCP_DISTILL_INTERVAL_S` (seconds, with
+memory writes enabled) and consolidation happens on an interval with no
+operator involvement. `scripts/memory_migrate_labels.py` is a one-time
+migration that labels overlay notes written before evidence labels existed as
+`(unverified)`, so legacy claims stop reading as verified fact.
 
 ### Resources
 
@@ -332,7 +343,8 @@ scripts/
   okf_bundle.py      # export/import the store as an OKF bundle (index.md, log.md, concepts)
   okf_consolidate.py # sleep-time pass: dedup, trust decay, forgetting (supersede below floor)
   memory_eval.py     # eval harness: recall, forgetting, efficiency, reuse metrics from JSONL cases
-  memory_distill.py  # offline distillation of session logs: proven queries + recurring failures
+  memory_distill.py  # distillation of session events (cluster + JSONL): proven queries + recurring failures
+  memory_migrate_labels.py # one-time: label pre-evidence overlay notes as (unverified)
 tests/
   unit/              # per-module unit tests
   contract/          # advertised MCP surface

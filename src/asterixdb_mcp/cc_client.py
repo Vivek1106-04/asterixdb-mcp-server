@@ -42,8 +42,13 @@ PLAN_FORMAT_JSON = "clean_json"
 # the gateway summarizes; the alternative ("dot") is a Graphviz rendering.
 HYRACKS_JOB_FORMAT_JSON = "json"
 
-# the only statement shapes the memory write path will pass through
-_MEMORY_WRITE_PREFIXES = ("INSERT INTO AgentMemory.Memory", "UPSERT INTO AgentMemory.Memory")
+# the only statement shapes the memory write path will pass through: the
+# concept store plus the episodic session-event record (insert-only)
+_MEMORY_WRITE_PREFIXES = (
+    "INSERT INTO AgentMemory.Memory",
+    "UPSERT INTO AgentMemory.Memory",
+    "INSERT INTO AgentMemory.SessionEvent",
+)
 
 # Acceptable JSON values that the CC may use for a successful query envelope.
 _SUCCESS_STATUSES = frozenset({"success"})
@@ -127,8 +132,8 @@ class CCClient:
         if not statement.lstrip().startswith(_MEMORY_WRITE_PREFIXES):
             raise GatewayError(
                 ErrorType.FORBIDDEN,
-                "Only INSERT/UPSERT statements targeting AgentMemory.Memory are permitted "
-                "on the memory write path.",
+                "Only INSERT/UPSERT statements targeting the AgentMemory store are "
+                "permitted on the memory write path.",
             )
         form = self._build_query_form(
             statement,

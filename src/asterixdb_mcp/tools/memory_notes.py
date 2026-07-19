@@ -29,6 +29,13 @@ NO_NOTES_HINT = (
     "(field formats, gotchas, proven query patterns) with memory_write."
 )
 
+# Appended after delivered notes so datasets that already have SOME knowledge
+# still prompt for the findings the notes do not cover yet.
+HAVE_NOTES_HINT = (
+    "If you discover a durable finding the notes above do not cover, persist it "
+    "with memory_write and include the proving query as source_query."
+)
+
 _NOTES_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m "
     "WHERE m.subject IN $subjects AND m.valid_to IS UNKNOWN;"
@@ -75,17 +82,21 @@ class RecallState:
 
     Ambient recall attaches learned notes to the first successful query that
     touches a dataset in a session; repeating them on every query would only
-    burn the client's context window.
+    burn the client's context window. Only subjects whose notes were actually
+    DELIVERED are marked: a dataset with no notes yet stays fresh, so a note
+    written later in the session still surfaces on its next query.
     """
 
     def __init__(self) -> None:
-        self._seen: set[str] = set()
+        self._delivered: set[str] = set()
 
-    def claim(self, subjects: list[str], *, first_use_only: bool) -> list[str]:
-        """Mark subjects as delivered; with first_use_only, return only new ones."""
-        fresh = [s for s in subjects if s not in self._seen]
-        self._seen.update(subjects)
-        return fresh if first_use_only else subjects
+    def fresh(self, subjects: list[str]) -> list[str]:
+        """Subjects whose notes have not been delivered this session."""
+        return [s for s in subjects if s not in self._delivered]
+
+    def mark(self, subjects: list[str]) -> None:
+        """Record subjects whose notes were just delivered."""
+        self._delivered.update(subjects)
 
 
 def subjects_from_statement(statement: str) -> list[str]:
@@ -111,15 +122,17 @@ async def attach_statement_notes(
     """Append learned notes for the statement's datasets to a tool result.
 
     With a RecallState and first_use_only, notes are attached only for datasets
-    not yet covered this session; either way delivered subjects are recorded so
-    later attachments do not repeat them.
+    not yet covered this session; either way the subjects actually delivered
+    are recorded so later attachments do not repeat them.
     """
     subjects = subjects_from_statement(statement)
-    if recall is not None:
-        subjects = recall.claim(subjects, first_use_only=first_use_only)
+    if recall is not None and first_use_only:
+        subjects = recall.fresh(subjects)
     notes = await fetch_memory_notes(client, ccid, subjects)
     if not notes:
         return result
+    if recall is not None:
+        recall.mark([str(n["subject"]) for n in notes if n.get("subject")])
     structured = result.structured
     if structured is not None:
         structured = {**structured, "learnedNotes": notes}
@@ -145,11 +158,8 @@ def render_notes(notes: list[dict[str, Any]]) -> str:
 def _note_text(row: dict[str, Any]) -> str:
     # Walk-owned concepts carry learned knowledge only in their overlay; their
     # core restates what the schema tools already return, so it is skipped.
-    if _is_walk_owned(row):
-        text = str(row.get("overlay") or "")
-    else:
-        text = str(row.get("text") or "")
-    return text.strip()[:MAX_NOTE_LEN]
+    source = row.get("overlay") if _is_walk_owned(row) else row.get("text")
+    return str(source or "").strip()[:MAX_NOTE_LEN]
 
 
 def _grounded(row: dict[str, Any]) -> bool | None:

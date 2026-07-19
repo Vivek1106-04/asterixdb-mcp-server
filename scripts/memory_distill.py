@@ -1,9 +1,10 @@
-"""Distill session logs into the agentic-memory store.
+"""Distill session events into the agentic-memory store (manual/cron entry).
 
-The offline half of automatic capture. The gateway appends one JSONL event per
-query outcome to its session log directory (config: session_log_dir); this
-script reads every session's log and distills the cross-session signal the
-inline capture cannot see:
+The offline half of automatic capture. The gateway records one event per query
+outcome — into ``AgentMemory.SessionEvent`` on the cluster when memory writes
+are enabled, with per-session JSONL files as the offline buffer. This script
+gathers events from BOTH sources (either may be empty), deduplicates them, and
+distills the cross-session signal the inline capture cannot see:
 
 - proven queries: a statement that succeeded against the same dataset in at
   least --min-sessions distinct sessions becomes a learned note carrying the
@@ -15,8 +16,12 @@ Notes are reconciled exactly like memory_write tool calls (duplicates no-op,
 catalog concepts get overlay annotations, history stays bi-temporal) by
 reusing the same pure reconcile function and write statements.
 
+The HTTP gateway can run the same pass automatically on an interval
+(ASTERIXDB_MCP_DISTILL_INTERVAL_S); this script remains the manual override
+and the path for pure-stdio deployments.
+
 Usage:
-    python scripts/memory_distill.py --logs-dir /path/to/session-logs \\
+    python scripts/memory_distill.py [--logs-dir /path/to/session-logs] \\
         [--cc http://localhost:19002] [--min-sessions 2] [--dry-run]
 """
 
@@ -37,16 +42,20 @@ from okf_refresh import execute
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from asterixdb_mcp.tools.memory_notes import subjects_from_statement  # noqa: E402
+from asterixdb_mcp.distill import (  # noqa: E402
+    EVENTS_QUERY,
+    MIN_FAILURES_DEFAULT,
+    MIN_SESSIONS_DEFAULT,
+    dedupe_events,
+    proven_queries,
+    recurring_failures,
+)
 from asterixdb_mcp.tools.memory_write import (  # noqa: E402
     _CURRENT_QUERY,
     _INSERT,
     _UPSERT,
     _reconcile,
 )
-
-MIN_SESSIONS_DEFAULT = 2
-MIN_FAILURES_DEFAULT = 3
 
 
 def load_events(logs_dir: Path) -> list[dict[str, Any]]:
@@ -63,40 +72,13 @@ def load_events(logs_dir: Path) -> list[dict[str, Any]]:
     return events
 
 
-def proven_queries(events: list[dict[str, Any]], min_sessions: int) -> list[tuple[str, str, str]]:
-    """(subject, note, source_query) for statements proven across sessions."""
-    sessions_by_key: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for event in events:
-        if event.get("outcome") != "success":
-            continue
-        statement = str(event.get("statement", ""))
-        for subject in subjects_from_statement(statement):
-            sessions_by_key[(subject, statement)].add(str(event.get("session", "")))
-    distilled = []
-    for (subject, statement), sessions in sorted(sessions_by_key.items()):
-        if len(sessions) >= min_sessions:
-            note = f"Proven query, used successfully in {len(sessions)} sessions: {statement}"
-            distilled.append((subject, note, statement))
-    return distilled
-
-
-def recurring_failures(events: list[dict[str, Any]], min_failures: int) -> list[tuple[str, str]]:
-    """(subject, note) for error classes that repeat with no recorded success."""
-    failures: dict[tuple[str, str], int] = defaultdict(int)
-    resolved: set[str] = set()
-    for event in events:
-        statement = str(event.get("statement", ""))
-        for subject in subjects_from_statement(statement):
-            if event.get("outcome") == "success":
-                resolved.add(subject)
-            else:
-                failures[(subject, str(event.get("error", "")))] += 1
-    distilled = []
-    for (subject, error), count in sorted(failures.items()):
-        if count >= min_failures and subject not in resolved:
-            note = f"Caution: queries on this dataset failed {count} times with {error}."
-            distilled.append((subject, note))
-    return distilled
+def load_cluster_events(cc: str) -> list[dict[str, Any]]:
+    """Read events recorded in AgentMemory.SessionEvent; empty when unreachable."""
+    try:
+        envelope = execute(cc, EVENTS_QUERY)
+    except Exception:
+        return []
+    return [row for row in envelope.get("results", []) if isinstance(row, dict)]
 
 
 def write_note(cc: str, subject: str, note: str, source_query: str | None = None) -> str:
@@ -118,14 +100,21 @@ def write_note(cc: str, subject: str, note: str, source_query: str | None = None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--logs-dir", required=True, help="Directory of session JSONL logs")
+    parser.add_argument(
+        "--logs-dir",
+        default=None,
+        help="Directory of session JSONL logs (optional; cluster events are always read)",
+    )
     parser.add_argument("--cc", default="http://localhost:19002", help="Cluster controller URL")
     parser.add_argument("--min-sessions", type=int, default=MIN_SESSIONS_DEFAULT)
     parser.add_argument("--min-failures", type=int, default=MIN_FAILURES_DEFAULT)
     parser.add_argument("--dry-run", action="store_true", help="Report, write nothing")
     args = parser.parse_args()
 
-    events = load_events(Path(args.logs_dir))
+    events = load_cluster_events(args.cc)
+    if args.logs_dir:
+        events += load_events(Path(args.logs_dir))
+    events = dedupe_events(events)
     proven = proven_queries(events, args.min_sessions)
     cautions = recurring_failures(events, args.min_failures)
 

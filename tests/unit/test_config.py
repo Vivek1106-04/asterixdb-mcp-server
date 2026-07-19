@@ -24,3 +24,4 @@ def test_defaults_match_constants() -> None:
     settings = Settings()
     assert settings.max_time_ms == DEFAULT_MAX_TIME_MS
     assert settings.max_bytes_per_query == DEFAULT_MAX_BYTES_PER_QUERY
+    assert settings.distill_interval_s == 0  # auto-distill off unless opted in

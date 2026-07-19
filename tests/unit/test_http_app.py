@@ -149,3 +149,49 @@ def test_build_http_app_oauth_protects_mcp() -> None:
         assert client.get(HEALTH_PATH).status_code == 200
         # No token -> rejected by the SDK's resource-server auth (no JWKS fetch).
         assert client.get("/mcp").status_code == 401
+
+
+# auto-distill background loop
+
+
+def test_auto_distill_installed_only_when_enabled() -> None:
+    enabled = Settings(
+        transport="http", auth_mode="none", memory_write_enabled=True, distill_interval_s=60
+    )
+    wrapped = build_http_app(server_module.build_server(enabled), enabled)
+    assert "_install_auto_distill" in wrapped.router.lifespan_context.__qualname__
+    # the wrapped lifespan still starts and stops cleanly (loop task cancelled)
+    with TestClient(wrapped) as client:
+        assert client.get(HEALTH_PATH).status_code == 200
+
+
+def test_auto_distill_requires_memory_writes() -> None:
+    settings = Settings(transport="http", auth_mode="none", distill_interval_s=60)
+    app = build_http_app(server_module.build_server(settings), settings)
+    assert "_install_auto_distill" not in getattr(
+        app.router.lifespan_context, "__qualname__", ""
+    )
+
+
+@pytest.mark.anyio
+async def test_distill_loop_runs_and_survives_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from asterixdb_mcp import http_app as http_app_module
+
+    calls: list[int] = []
+
+    async def fake_run_distill(client: object, settings: object) -> dict[str, int]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("bad pass")
+        return {"events": 0}
+
+    monkeypatch.setattr(http_app_module, "run_distill", fake_run_distill)
+    settings = Settings(memory_write_enabled=True, distill_interval_s=0.01)
+    task = asyncio.create_task(http_app_module._distill_loop(None, settings))
+    while len(calls) < 2:  # first pass raised; the loop must keep going
+        await asyncio.sleep(0.005)
+    task.cancel()

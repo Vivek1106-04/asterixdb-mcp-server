@@ -22,7 +22,7 @@ from ..errors import ErrorType, GatewayError
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
 from ..naming import quote_identifier, resolve
 from . import ToolResult
-from .memory_notes import NO_NOTES_HINT, fetch_memory_notes, render_notes
+from .memory_notes import HAVE_NOTES_HINT, NO_NOTES_HINT, fetch_memory_notes, render_notes
 
 DEFAULT_SIZE = 10
 MAX_SIZE = 100
@@ -79,7 +79,12 @@ async def run_sample_dataset(
     notes = await fetch_memory_notes(client, ccid, [f"{dv}.{ds}", dv])
     if notes:
         structured["learnedNotes"] = notes
-        text += "\n\nLearned notes from memory about this dataset:\n" + render_notes(notes)
+        text += (
+            "\n\nLearned notes from memory about this dataset:\n"
+            + render_notes(notes)
+            + "\n\n"
+            + HAVE_NOTES_HINT
+        )
     else:
         text += "\n\n" + NO_NOTES_HINT.format(subject=f"{dv}.{ds}")
     return ToolResult(text=text, structured=structured)
