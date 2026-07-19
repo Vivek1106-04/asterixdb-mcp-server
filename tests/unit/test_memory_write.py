@@ -332,3 +332,112 @@ async def test_unverified_replacement_gets_strong_guidance(write_settings: Setti
     assert result.structured["verified"] is False
     assert "UNVERIFIED" in result.text and "source_query" in result.text
     assert "(unverified) " + CORRECTION in _form_of(cap.requests[-1])["$row"].replace('\\"', '"')
+
+
+# re-grounding: same note arriving WITH evidence upgrades instead of deduping
+
+
+_REGROUND_WALK_ROW = {
+    "id": "shop.orders@t0",
+    "subject": "shop.orders",
+    "type": "AsterixDB Dataset",
+    "kind": "semantic",
+    "core": "core facts",
+    "overlay": "(unverified) tags is a CSV string\n",
+    "text": "core facts\n\n(unverified) tags is a CSV string\n",
+    "valid_from": "t0",
+}
+
+
+async def test_same_note_with_evidence_regrounds_overlay(write_settings: Settings) -> None:
+    cap = make_capturing_cc(write_settings, handler=_store_handler(_REGROUND_WALK_ROW))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text="tags is a CSV string",
+        source_query="SELECT is_array(tags) FROM shop.orders LIMIT 1;",
+    )
+    assert result.structured["action"] == "regrounded"
+    assert result.structured["verified"] is True
+    row = _form_of(cap.requests[-1])["$row"]
+    assert "(unverified)" not in row
+    assert "tags is a CSV string" in row
+
+
+async def test_unverified_note_without_evidence_stays_unchanged(write_settings: Settings) -> None:
+    cap = make_capturing_cc(write_settings, handler=_store_handler(_REGROUND_WALK_ROW))
+    result = await run_memory_write(
+        cap.client, write_settings, subject="shop.orders", text="tags is a CSV string"
+    )
+    assert result.structured["action"] == "unchanged"
+
+
+async def test_grounded_overlay_note_with_evidence_is_unchanged(write_settings: Settings) -> None:
+    grounded_row = {
+        **_REGROUND_WALK_ROW,
+        "overlay": "tags is a CSV string\n",
+        "text": "core facts\n\ntags is a CSV string\n",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(grounded_row))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="shop.orders",
+        text="tags is a CSV string",
+        source_query="SELECT 1;",
+    )
+    assert result.structured["action"] == "unchanged"
+
+
+async def test_standalone_note_regrounds_when_evidence_arrives(write_settings: Settings) -> None:
+    existing = {
+        "id": "team/glossary@t0",
+        "subject": "team/glossary",
+        "type": "Note",
+        "kind": "semantic",
+        "text": "GMV means gross merchandise value",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="team/glossary",
+        text="GMV means gross merchandise value",
+        source_query="SELECT 1;",
+    )
+    assert result.structured["action"] == "regrounded"
+    assert '"source_query": "SELECT 1;"' in _form_of(cap.requests[-1])["$row"]
+
+
+async def test_standalone_grounded_note_stays_unchanged(write_settings: Settings) -> None:
+    existing = {
+        "id": "team/glossary@t0",
+        "subject": "team/glossary",
+        "type": "Note",
+        "text": "GMV means gross merchandise value",
+        "source_query": "SELECT 1;",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="team/glossary",
+        text="GMV means gross merchandise value",
+        source_query="SELECT 2;",
+    )
+    assert result.structured["action"] == "unchanged"
+
+
+async def test_session_event_insert_is_permitted_on_write_path(
+    write_settings: Settings,
+) -> None:
+    cap = make_capturing_cc(write_settings)
+    await cap.client.execute_memory_write(
+        "INSERT INTO AgentMemory.SessionEvent ([$row]);",
+        client_context_id="sess::t::1",
+        statement_parameters={"row": {"id": "e1"}},
+    )
+    assert len(cap.requests) == 1

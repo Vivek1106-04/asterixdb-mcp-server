@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from asterixdb_mcp.config import Settings
+from asterixdb_mcp.tools.memory_notes import HAVE_NOTES_HINT
 from asterixdb_mcp.tools.sample_dataset import MAX_SIZE, run_sample_dataset
 from tests.conftest import json_response, make_capturing_cc
 
@@ -168,6 +169,7 @@ async def test_learned_notes_ride_with_the_sample(settings: Settings) -> None:
     result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
     assert result.structured["learnedNotes"][0]["note"] == "split categories"
     assert "split categories" in result.text
+    assert HAVE_NOTES_HINT in result.text
 
 
 async def test_sample_without_notes_prompts_first_write(settings: Settings) -> None:

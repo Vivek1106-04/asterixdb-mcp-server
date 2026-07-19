@@ -67,6 +67,9 @@ BOOTSTRAP_STATEMENTS = (
     "CREATE DATASET AgentMemory.Memory(MemoryType) IF NOT EXISTS PRIMARY KEY id;",
     "CREATE INDEX memSubject IF NOT EXISTS ON AgentMemory.Memory(subject: string?) ENFORCED;",
     "CREATE INDEX memText IF NOT EXISTS ON AgentMemory.Memory(`text`: string?) TYPE FULLTEXT ENFORCED;",
+    # episodic query-outcome events the gateway records for distillation
+    "CREATE TYPE AgentMemory.SessionEventType IF NOT EXISTS AS OPEN { id: string };",
+    "CREATE DATASET AgentMemory.SessionEvent(SessionEventType) IF NOT EXISTS PRIMARY KEY id;",
 )
 
 WALK_QUERY = 'SET `import-private-functions` "true"; SELECT VALUE c FROM okf_catalog({args}) c;'

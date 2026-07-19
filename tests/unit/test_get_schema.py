@@ -16,6 +16,7 @@ from asterixdb_mcp.tools.get_schema import (
     run_get_schema,
     summarize_secondary_indexes,
 )
+from asterixdb_mcp.tools.memory_notes import HAVE_NOTES_HINT
 from tests.conftest import json_response, make_capturing_cc
 
 pytestmark = pytest.mark.anyio
@@ -202,6 +203,7 @@ async def test_learned_notes_ride_with_the_schema(settings: Settings) -> None:
         {"subject": "ShopDV.customers", "note": "tags is a CSV string", "grounded": False}
     ]
     assert "tags is a CSV string" in result.text
+    assert HAVE_NOTES_HINT in result.text
 
 
 async def test_schema_succeeds_when_memory_store_is_unreachable(settings: Settings) -> None:

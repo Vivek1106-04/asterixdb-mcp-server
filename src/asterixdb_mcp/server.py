@@ -80,7 +80,7 @@ from .tools.health_check import run_database_health_check
 from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
-from .tools.memory_capture import CaptureState, capture_query_outcome
+from .tools.memory_capture import CaptureState, capture_error_signal, capture_query_outcome
 from .tools.memory_notes import RecallState
 from .tools.memory_search import run_memory_search
 from .tools.memory_write import run_memory_write
@@ -612,13 +612,14 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             result=result,
         )
         # Deterministic capture: distill an error->fix pair into the memory
-        # store the moment a failing statement finds its working form.
+        # store the moment a failing statement finds its working form. The
+        # signal covers raised errors AND silent misses (0 rows + warnings).
         await capture_query_outcome(
             _client(),
             settings,
             capture,
             statement=statement,
-            result_error=(result.structured or {}).get("errorType") if result.is_error else None,
+            result_error=capture_error_signal(result),
         )
         return _to_call_tool_result(result)
 
