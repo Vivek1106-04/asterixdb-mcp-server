@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from urllib.parse import parse_qs
 
 import httpx
@@ -14,6 +15,7 @@ from asterixdb_mcp.distill import (
     proven_queries,
     recurring_failures,
     run_distill,
+    slow_patterns,
 )
 from tests.conftest import make_capturing_cc
 
@@ -105,3 +107,67 @@ async def test_run_distill_counts_failed_writes_without_raising(settings: Settin
     cap = make_capturing_cc(settings, handler=handler)
     summary = await run_distill(cap.client, settings)
     assert summary["failed"] == 1
+
+
+# slow_patterns
+
+
+def _slow(ms: float, session: str = "a") -> dict:
+    # Distinct id so dedupe_events keeps each timing sample.
+    return {
+        "id": f"{session}@{ms}",
+        "outcome": "success",
+        "statement": STMT,
+        "session": session,
+        "elapsed_ms": ms,
+    }
+
+
+def test_slow_patterns_flags_consistently_slow_statements() -> None:
+    events = [_slow(9000), _slow(11000), _slow(10000)]
+    result = slow_patterns(events, min_occurrences=3, slow_ms=5000)
+    assert len(result) == 1
+    subject, note = result[0]
+    assert subject == "ShopDV.customers"
+    assert "Slow pattern" in note and "10.0s" in note and STMT in note
+
+
+def test_slow_patterns_ignores_fast_or_too_few() -> None:
+    assert slow_patterns([_slow(9000), _slow(9000)], min_occurrences=3, slow_ms=5000) == []
+    fast = [_slow(100), _slow(200), _slow(300)]
+    assert slow_patterns(fast, min_occurrences=3, slow_ms=5000) == []
+
+
+def test_slow_patterns_ignores_errors_and_missing_timings() -> None:
+    events = [
+        {"outcome": "error", "statement": STMT, "elapsed_ms": 20000},
+        {"outcome": "success", "statement": STMT},  # no elapsed_ms
+        {"outcome": "success", "statement": STMT, "elapsed_ms": "slow"},  # non-numeric
+    ]
+    assert slow_patterns(events, min_occurrences=1, slow_ms=5000) == []
+
+
+async def test_run_distill_writes_slow_pattern_note(settings: Settings) -> None:
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    events = [_slow(9000), _slow(11000), _slow(10000)]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(req.content.decode())["statement"][0]
+        if stmt.startswith("SELECT VALUE e FROM AgentMemory.SessionEvent"):
+            return httpx.Response(200, json={"status": "success", "results": events})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    summary = await run_distill(cap.client, settings)
+    assert summary["events"] == 3
+
+    writes = [
+        json.loads(parse_qs(r.content.decode())["$row"][0])
+        for r in cap.requests
+        if "INSERT INTO AgentMemory.Memory" in parse_qs(r.content.decode())["statement"][0]
+    ]
+    slow_notes = [w for w in writes if "Slow pattern" in w.get("text", "")]
+    assert len(slow_notes) == 1
+    # Heuristic from past timings — must NOT be grounded with a source_query.
+    assert "source_query" not in slow_notes[0]
+    assert slow_notes[0]["tags"] == ["distilled"]

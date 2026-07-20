@@ -481,3 +481,98 @@ async def test_author_is_stamped_on_written_row(settings: Settings) -> None:
     insert_form = parse_qs(cap.requests[-1].content.decode())
     row = json.loads(insert_form["$row"][0])
     assert row["author"] == "claude-desktop/1.2"
+
+
+# numeric-conflict detection (pure)
+
+
+def test_numeric_conflicts_flags_disjoint_values_under_same_word() -> None:
+    from asterixdb_mcp.tools.memory_write import numeric_conflicts
+
+    conflicts = numeric_conflicts("the dataset has 150000 rows", "the dataset has 150346 rows")
+    # Every word within the number's window is a candidate label; the 'rows'
+    # contradiction must be among them, each carrying both values.
+    joined = " | ".join(conflicts)
+    assert "rows" in joined
+    assert "150346" in joined and "150000" in joined
+
+
+def test_numeric_conflicts_ignores_shared_values() -> None:
+    from asterixdb_mcp.tools.memory_write import numeric_conflicts
+
+    # 1 and 1.0 normalize equal; a shared value under "stars" means agreement.
+    assert numeric_conflicts("stars run 1 to 5", "stars run 1.0 to 5.0") == []
+
+
+def test_numeric_conflicts_empty_when_no_existing_text() -> None:
+    from asterixdb_mcp.tools.memory_write import numeric_conflicts
+
+    assert numeric_conflicts("count is 5", "") == []
+    assert numeric_conflicts("count is 5", "   ") == []
+
+
+def test_numeric_conflicts_capped() -> None:
+    from asterixdb_mcp.tools.memory_write import MAX_REPORTED_CONFLICTS, numeric_conflicts
+
+    new = "alpha 1 beta 1 gamma 1 delta 1 epsilon 1"
+    old = "alpha 2 beta 2 gamma 2 delta 2 epsilon 2"
+    assert len(numeric_conflicts(new, old)) == MAX_REPORTED_CONFLICTS
+
+
+# numeric-conflict wiring
+
+
+async def test_write_warns_on_numeric_conflict(write_settings: Settings) -> None:
+    existing = {
+        "id": "dv.ds@t0",
+        "subject": "dv.ds",
+        "type": "Note",
+        "text": "the dataset has 150346 rows",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client, write_settings, subject="dv.ds", text="the dataset has 150000 rows"
+    )
+
+    assert result.structured["status"] == "success"  # write still lands
+    assert any("rows" in c for c in result.structured["conflicts"])
+    assert "Possible conflict" in result.text
+
+
+async def test_replaces_suppresses_conflict_warning(write_settings: Settings) -> None:
+    existing = {
+        "id": "dv.ds@t0",
+        "subject": "dv.ds",
+        "type": "Note",
+        "text": "the dataset has 150346 rows",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="the dataset has 150000 rows",
+        replaces="150346 rows",
+    )
+
+    assert "conflicts" not in result.structured  # correction already retires the stale line
+    assert "Possible conflict" not in result.text
+
+
+async def test_no_conflict_field_when_values_agree(write_settings: Settings) -> None:
+    existing = {
+        "id": "dv.ds@t0",
+        "subject": "dv.ds",
+        "type": "Note",
+        "text": "stars run 1.0 to 5.0",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+    result = await run_memory_write(
+        cap.client, write_settings, subject="dv.ds", text="stars also include half steps 2.5"
+    )
+    assert "conflicts" not in result.structured
