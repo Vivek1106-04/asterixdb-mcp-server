@@ -79,7 +79,12 @@ async def run_execute_query(
         # referenced — often the note IS the fix (a field gotcha, a proven
         # pattern) and the model never had to ask for it.
         return await attach_statement_notes(
-            client, client_context_id, statement, ToolResult.error(err), recall=recall
+            client,
+            client_context_id,
+            statement,
+            ToolResult.error(err),
+            recall=recall,
+            settings=settings,
         )
 
     rows = envelope.get("results") or []
@@ -132,7 +137,13 @@ async def run_execute_query(
     # Ambient recall: the first successful query touching a dataset this session
     # carries its learned notes, so recall never depends on the model asking.
     return await attach_statement_notes(
-        client, client_context_id, statement, result, recall=recall, first_use_only=True
+        client,
+        client_context_id,
+        statement,
+        result,
+        recall=recall,
+        first_use_only=True,
+        settings=settings,
     )
 
 

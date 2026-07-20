@@ -39,6 +39,7 @@ import httpx
 from .cc_client import CCClient
 from .config import Settings
 from .context_id import make_client_context_id
+from .decay import run_decay
 from .distill import run_distill
 from .errors import GatewayError
 from .okf_walk import bootstrap_store, run_walk
@@ -117,6 +118,7 @@ async def _maintenance_pass(settings: Settings) -> None:
         ccid = make_client_context_id(settings.agent_session_id, "maintenance")
         await _step("bootstrap", bootstrap_store(client, ccid))
         await _step("walk", _log_summary("walk", run_walk(client, settings)))
+        await _step("decay", _log_summary("decay", run_decay(client, settings)))
         await _step("distill", _log_summary("distill", run_distill(client, settings)))
 
 
