@@ -32,6 +32,8 @@ Defense-in-Depth:
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -46,6 +48,20 @@ MAX_TEXT_LEN = 4000
 MAX_LINKS = 16
 NOTE_TYPE = "Note"
 KIND = "semantic"
+
+# Numeric-conflict detection: a cheap, deterministic nudge. When a new note
+# carries a number under the same nearby word as the stored note but the values
+# never overlap, the write still lands (append-only truth), and the response
+# flags the possible contradiction so the model resolves it with `replaces`.
+MAX_REPORTED_CONFLICTS = 3
+_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z_]{2,}")
+_CONFLICT_CONTEXT_CHARS = 30
+# Structural words carry no claim; excluding them keeps the label-match honest.
+_CONFLICT_STOPWORDS = frozenset(
+    {"the", "and", "for", "with", "not", "are", "was", "this",
+     "that", "from", "use", "using", "into", "have", "has"}
+)
 
 _CURRENT_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = $subject AND m.valid_to IS UNKNOWN;"
@@ -127,6 +143,13 @@ async def run_memory_write(
         existing = rows[0] if rows else None
         now = datetime.now(timezone.utc).isoformat()
 
+        # Compare against the stored note BEFORE it is superseded; a correction
+        # via `replaces` already retires the stale line, so only flag when the
+        # writer did not signal one.
+        conflicts = (
+            [] if replaces else numeric_conflicts(note, _existing_note_text(existing))
+        )
+
         action, row, retired = _reconcile(
             existing, subject, note, now, links, tags, source_query, replaces
         )
@@ -155,17 +178,103 @@ async def run_memory_write(
     except GatewayError as err:
         return ToolResult.error(err)
     retired_text = f", {retired} outdated line(s) retired" if retired else ""
+    structured: dict[str, Any] = {
+        "status": "success",
+        "subject": subject,
+        "action": action,
+        "id": row["id"],
+        "retired": retired,
+        "verified": bool(source_query),
+    }
+    if conflicts:
+        structured["conflicts"] = conflicts
     return ToolResult(
         text=f"Memory {action}: '{subject}' ({row['id']}){retired_text}."
-        + _verification_guidance(source_query, retired),
-        structured={
-            "status": "success",
-            "subject": subject,
-            "action": action,
-            "id": row["id"],
-            "retired": retired,
-            "verified": bool(source_query),
-        },
+        + _verification_guidance(source_query, retired)
+        + _conflict_warning(conflicts),
+        structured=structured,
+    )
+
+
+def _existing_note_text(existing: dict[str, Any] | None) -> str:
+    """The stored note text to compare a new note against (overlay for walk-owned)."""
+    if existing is None:
+        return ""
+    source = existing.get("overlay") if _is_walk_owned(existing) else existing.get("text")
+    return str(source or "")
+
+
+def _numeric_claims(text: str) -> dict[str, set[str]]:
+    """Map each nearby word to the numeric values it appears with in ``text``.
+
+    Numbers are normalized by float value so "1" and "1.0" agree; a word within
+    ``_CONFLICT_CONTEXT_CHARS`` of a number is that number's label.
+    """
+    claims: dict[str, set[str]] = defaultdict(set)
+    for match in _NUMBER_RE.finditer(text):
+        value = _normalize_number(match.group())
+        start = max(0, match.start() - _CONFLICT_CONTEXT_CHARS)
+        window = text[start : match.end() + _CONFLICT_CONTEXT_CHARS]
+        for word in _WORD_RE.findall(window):
+            lowered = word.lower()
+            if lowered not in _CONFLICT_STOPWORDS:
+                claims[lowered].add(value)
+    return claims
+
+
+def _normalize_number(raw: str) -> str:
+    # raw is always a _NUMBER_RE match, so float() cannot fail here; normalizing
+    # by value lets "1" and "1.0" compare equal.
+    return str(float(raw))
+
+
+def numeric_conflicts(new_note: str, existing_text: str) -> list[str]:
+    """Human-readable descriptors of numeric claims that contradict the store.
+
+    A conflict is a word carrying numbers in BOTH notes where a new value
+    neither matches a stored value nor falls within the stored value range.
+    The range check is what keeps a point inside a stored interval (a 2.5 under
+    a stored "1.0 to 5.0") from reading as a contradiction. Heuristic and
+    deliberately conservative — it warns, never blocks.
+    """
+    if not existing_text.strip():
+        return []
+    new_claims = _numeric_claims(new_note)
+    old_claims = _numeric_claims(existing_text)
+    conflicts: list[str] = []
+    for label, new_values in sorted(new_claims.items()):
+        old_values = old_claims.get(label)
+        if old_values is None or not _values_conflict(new_values, old_values):
+            continue
+        conflicts.append(
+            f"'{label}': stored {_fmt_values(old_values)} vs new {_fmt_values(new_values)}"
+        )
+        if len(conflicts) == MAX_REPORTED_CONFLICTS:
+            break
+    return conflicts
+
+
+def _values_conflict(new_values: set[str], old_values: set[str]) -> bool:
+    """True when some new value is neither a stored value nor within their range."""
+    if new_values & old_values:
+        return False
+    old_floats = [float(v) for v in old_values]
+    low, high = min(old_floats), max(old_floats)
+    return any(not (low <= float(v) <= high) for v in new_values)
+
+
+def _fmt_values(values: set[str]) -> str:
+    return ", ".join(sorted(values, key=float))
+
+
+def _conflict_warning(conflicts: list[str]) -> str:
+    if not conflicts:
+        return ""
+    joined = "; ".join(conflicts)
+    return (
+        f" Possible conflict with an existing note on this subject ({joined}). "
+        "If the new value is correct, rewrite with replaces=<fragment of the "
+        "stale note> so the contradiction does not sit in the store."
     )
 
 

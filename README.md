@@ -102,7 +102,11 @@ pass, so useful notes stay and dead weight ages out.
 
 `memory_write` is the one agent-facing write surface: it persists a curated
 note bi-temporally — new subjects become standalone note concepts, notes on
-catalog concepts land in the learned overlay and survive refreshes. It is off
+catalog concepts land in the learned overlay and survive refreshes. A write
+whose numbers contradict an existing note on the same subject (a different
+value under the same nearby word, outside the stored range) still lands — truth
+is append-only — but the response flags the possible conflict so the model
+resolves it with `replaces`. It is off
 by default (`ASTERIXDB_MCP_MEMORY_WRITE_ENABLED=true` enables it) and the CC
 client refuses anything on that path except INSERT/UPSERT into the
 `AgentMemory` store (the `Memory` concept dataset and the insert-only
@@ -129,8 +133,10 @@ with the per-session JSONL file under
 flush to the cluster on the next successful write). `scripts/memory_distill.py`
 distills the cross-session signal from both sources: queries proven across
 sessions become grounded notes (their statement is stored as `source_query`,
-so revalidation keeps them honest), and error classes that repeat without a
-recorded success become caution notes. On the HTTP transport the gateway can
+so revalidation keeps them honest), error classes that repeat without a
+recorded success become caution notes, and statements that keep succeeding but
+average above a wall-clock threshold become performance-caution notes (kept
+unverified — a heuristic from past timings, not a proven fact). On the HTTP transport the gateway can
 run that pass itself — set `ASTERIXDB_MCP_DISTILL_INTERVAL_S` (seconds, with
 memory writes enabled) and consolidation happens on an interval with no
 operator involvement.

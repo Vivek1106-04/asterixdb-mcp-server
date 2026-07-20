@@ -9,7 +9,10 @@ session can see:
   least ``min_sessions`` distinct sessions becomes a learned note carrying the
   statement as its ``source_query``, so revalidation keeps it grounded,
 - recurring failures: an error class hit repeatedly against a dataset with no
-  recorded success becomes a caution note.
+  recorded success becomes a caution note,
+- slow patterns: a statement that keeps succeeding but averages above a
+  wall-clock threshold becomes a performance-caution note, so the next session
+  restructures instead of rediscovering the cost.
 
 Notes are written through ``run_memory_write`` so they reconcile exactly like
 tool-call writes: duplicates no-op, catalog concepts get overlay annotations,
@@ -35,6 +38,10 @@ from .tools.memory_write import run_memory_write
 
 MIN_SESSIONS_DEFAULT = 2
 MIN_FAILURES_DEFAULT = 3
+# Slow-pattern thresholds: a statement must succeed at least this many times and
+# average above this wall-clock cost before it is worth a performance caution.
+MIN_SLOW_OCCURRENCES_DEFAULT = 3
+SLOW_MS_DEFAULT = 5_000.0
 
 EVENTS_QUERY = f"SELECT VALUE e FROM {SESSION_EVENT_DATASET} e;"
 
@@ -92,6 +99,42 @@ def recurring_failures(events: list[dict[str, Any]], min_failures: int) -> list[
     return distilled
 
 
+def slow_patterns(
+    events: list[dict[str, Any]], min_occurrences: int, slow_ms: float
+) -> list[tuple[str, str]]:
+    """(subject, note) for statements that keep succeeding but run slowly.
+
+    Only successful events with a numeric ``elapsed_ms`` count; a statement is
+    flagged when it has at least ``min_occurrences`` such runs whose mean cost
+    exceeds ``slow_ms``. The note is UNVERIFIED on purpose — it is a heuristic
+    from past timings, not a fact a single query proves, so it must not carry a
+    source_query.
+    """
+    timings: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for event in events:
+        if event.get("outcome") != "success":
+            continue
+        elapsed = event.get("elapsed_ms")
+        if not isinstance(elapsed, (int, float)):
+            continue
+        statement = str(event.get("statement", ""))
+        for subject in subjects_from_statement(statement):
+            timings[(subject, statement)].append(float(elapsed))
+    distilled = []
+    for (subject, statement), samples in sorted(timings.items()):
+        if len(samples) < min_occurrences:
+            continue
+        avg_ms = sum(samples) / len(samples)
+        if avg_ms <= slow_ms:
+            continue
+        note = (
+            f"Slow pattern: this query averaged {avg_ms / 1000:.1f}s over "
+            f"{len(samples)} runs — consider restructuring before reuse: {statement}"
+        )
+        distilled.append((subject, note))
+    return distilled
+
+
 async def fetch_cluster_events(client: CCClient, ccid: str) -> list[dict[str, Any]]:
     """Read every recorded session event from the cluster (best-effort)."""
     try:
@@ -107,6 +150,8 @@ async def run_distill(
     *,
     min_sessions: int = MIN_SESSIONS_DEFAULT,
     min_failures: int = MIN_FAILURES_DEFAULT,
+    min_slow_occurrences: int = MIN_SLOW_OCCURRENCES_DEFAULT,
+    slow_ms: float = SLOW_MS_DEFAULT,
 ) -> dict[str, int]:
     """One in-process distill pass over the cluster's session events.
 
@@ -118,24 +163,36 @@ async def run_distill(
     events = dedupe_events(await fetch_cluster_events(client, ccid))
     proven = proven_queries(events, min_sessions)
     cautions = recurring_failures(events, min_failures)
+    slow = slow_patterns(events, min_slow_occurrences, slow_ms)
 
     summary: dict[str, int] = defaultdict(int)
     summary["events"] = len(events)
     for subject, note, source_query in proven:
-        result = await run_memory_write(
-            client,
-            settings,
-            subject=subject,
-            text=note,
-            tags=["distilled"],
-            source_query=source_query,
-        )
-        action = "failed" if result.is_error else str(result.structured.get("action"))
-        summary[action] += 1
+        await _write_distilled(client, settings, subject, note, summary, source_query=source_query)
     for subject, note in cautions:
-        result = await run_memory_write(
-            client, settings, subject=subject, text=note, tags=["distilled"]
-        )
-        action = "failed" if result.is_error else str(result.structured.get("action"))
-        summary[action] += 1
+        await _write_distilled(client, settings, subject, note, summary)
+    for subject, note in slow:
+        await _write_distilled(client, settings, subject, note, summary)
     return dict(summary)
+
+
+async def _write_distilled(
+    client: CCClient,
+    settings: Settings,
+    subject: str,
+    note: str,
+    summary: dict[str, int],
+    *,
+    source_query: str | None = None,
+) -> None:
+    """Persist one distilled note and tally the reconcile action into ``summary``."""
+    result = await run_memory_write(
+        client,
+        settings,
+        subject=subject,
+        text=note,
+        tags=["distilled"],
+        source_query=source_query,
+    )
+    action = "failed" if result.is_error else str(result.structured.get("action"))
+    summary[action] += 1
