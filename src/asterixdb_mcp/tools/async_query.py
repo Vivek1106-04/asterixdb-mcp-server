@@ -32,6 +32,7 @@ from ..permits import PermitPools
 from ..plan_guard import assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
 from . import ToolResult
+from .memory_capture import CaptureState, capture_query_outcome
 
 # Result windowing bounds, mirrored from the inputSchema.
 DEFAULT_LIMIT = 20
@@ -141,6 +142,8 @@ async def run_wait_on_async_query(
     timeout_ms: int | None = None,
     sleep: Callable[[float], Awaitable[None]] | None = None,
     clock: Callable[[], float] | None = None,
+    capture: CaptureState | None = None,
+    client_name: str | None = None,
 ) -> ToolResult:
     """Long-poll a submitted query (by clientContextID) until terminal or window ends.
 
@@ -150,6 +153,11 @@ async def run_wait_on_async_query(
     cadence. If the window elapses before the query finishes, the tool returns
     ``done=false`` so the caller can wait again, rather than holding the
     connection open indefinitely.
+
+    When ``capture`` is passed, a terminal status also feeds the memory-capture
+    pipeline: async timeouts and failures become session events and can pair
+    with a later working form, exactly like the synchronous path — otherwise an
+    expensive lesson (e.g. "this join shape times out") dies with the chat.
     """
     owned = _check_ownership(settings, client_context_id)
     if owned is not None:
@@ -168,7 +176,17 @@ async def run_wait_on_async_query(
     try:
         async with pools.waits.acquire():
             return await _poll_until_terminal(
-                client, audit, entry, handle, deadline, interval_s, sleep, clock
+                client,
+                settings,
+                audit,
+                entry,
+                handle,
+                deadline,
+                interval_s,
+                sleep,
+                clock,
+                capture,
+                client_name,
             )
     except GatewayError as err:
         return ToolResult.error(err)
@@ -176,6 +194,7 @@ async def run_wait_on_async_query(
 
 async def _poll_until_terminal(
     client: CCClient,
+    settings: Settings,
     audit: AuditLog,
     entry: AuditEntry,
     handle: str,
@@ -183,16 +202,44 @@ async def _poll_until_terminal(
     interval_s: float,
     sleep: Callable[[float], Awaitable[None]],
     clock: Callable[[], float],
+    capture: CaptureState | None,
+    client_name: str | None,
 ) -> ToolResult:
     """Poll the status handle until terminal or the deadline passes."""
     while True:
         envelope = await client.poll_status(handle)
         status = (_as_str(envelope.get(STATUS_FIELD)) or "").lower()
         if status in _TERMINAL_STATUSES:
+            if capture is not None:
+                await _capture_terminal_outcome(
+                    client, settings, capture, entry, status, client_name
+                )
             return _terminal_result(audit, entry, envelope, status)
         if clock() >= deadline:
             return _still_running_result(entry.client_context_id, status)
         await sleep(interval_s)
+
+
+async def _capture_terminal_outcome(
+    client: CCClient,
+    settings: Settings,
+    capture: CaptureState,
+    entry: AuditEntry,
+    status: str,
+    client_name: str | None,
+) -> None:
+    """Feed an async query's terminal outcome through memory capture (best-effort)."""
+    error_signal = (
+        None if status == _SUCCESS_STATUS else _FAILURE_ERROR_TYPES[status].value
+    )
+    await capture_query_outcome(
+        client,
+        settings,
+        capture,
+        statement=entry.statement,
+        result_error=error_signal,
+        client_name=client_name,
+    )
 
 
 def _terminal_result(

@@ -7,6 +7,7 @@ no config file on disk. Defaults target a local single-node AsterixDB cluster.
 
 from __future__ import annotations
 
+import uuid
 from typing import Literal
 
 from pydantic import Field
@@ -81,8 +82,11 @@ class Settings(BaseSettings):
     # Session identity
     agent_session_id: str = Field(
         default="local-session",
-        description="Stable identifier for this gateway instance, used as the leading "
-        "segment of the namespaced clientContextID ({agentSessionId}::{userTag}::{uuid}).",
+        description="Identifier prefix for this gateway instance, used as the leading "
+        "segment of the namespaced clientContextID ({agentSessionId}::{userTag}::{uuid}). "
+        "load_settings() appends a per-process suffix so every gateway launch is a "
+        "distinct session — cross-session distillation counts distinct sessions, which "
+        "a shared static id would silently defeat.",
     )
 
     # Agentic-memory store
@@ -287,5 +291,12 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     """Load settings from the environment. Kept as a function so tests can call it
-    with a patched environment and the server has a single construction point."""
-    return Settings()
+    with a patched environment and the server has a single construction point.
+
+    The configured ``agent_session_id`` is treated as a prefix: a short random
+    suffix makes each gateway process a distinct session, so repeated launches
+    from one client config still count as separate sessions in distillation.
+    """
+    settings = Settings()
+    session_id = f"{settings.agent_session_id}-{uuid.uuid4().hex[:6]}"
+    return settings.model_copy(update={"agent_session_id": session_id})

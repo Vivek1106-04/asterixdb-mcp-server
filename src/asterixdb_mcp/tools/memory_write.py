@@ -66,8 +66,13 @@ async def run_memory_write(
     tags: list[str] | None = None,
     source_query: str | None = None,
     replaces: str | None = None,
+    author: str | None = None,
 ) -> ToolResult:
-    """Persist one agent-curated note, reconciled bi-temporally by subject."""
+    """Persist one agent-curated note, reconciled bi-temporally by subject.
+
+    ``author`` is provenance ("client-name/version"), stamped on the written
+    row so the store records which connected client produced each note.
+    """
     if not settings.memory_write_enabled:
         return ToolResult.error(
             GatewayError(
@@ -125,6 +130,8 @@ async def run_memory_write(
         action, row, retired = _reconcile(
             existing, subject, note, now, links, tags, source_query, replaces
         )
+        if author and action != "unchanged":
+            row = {**row, "author": author}
         if action == "unchanged":
             return ToolResult(
                 text=f"Memory for '{subject}' already contains this note; nothing written.",
