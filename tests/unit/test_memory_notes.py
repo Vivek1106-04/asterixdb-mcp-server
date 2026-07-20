@@ -60,14 +60,14 @@ async def test_fetch_returns_learned_notes_and_binds_subjects(settings: Settings
 
     notes = await fetch_memory_notes(cap.client, "ccid", ["ShopDV.customers", "ShopDV"])
 
-    assert notes == [
-        {
-            "subject": "ShopDV.customers",
-            "note": "the tags field is a CSV string",
-            "grounded": False,
-        },
-        {"subject": "ShopDV", "note": "learned", "grounded": None},
-    ]
+    # Both notes are delivered; order is score-driven, so compare by subject.
+    by_subject = {n["subject"]: n for n in notes}
+    assert by_subject["ShopDV.customers"] == {
+        "subject": "ShopDV.customers",
+        "note": "the tags field is a CSV string",
+        "grounded": False,
+    }
+    assert by_subject["ShopDV"] == {"subject": "ShopDV", "note": "learned", "grounded": None}
     form = parse_qs(cap.requests[0].content.decode())
     assert form["$subjects"][0] == '["ShopDV.customers", "ShopDV"]'
 
@@ -266,3 +266,125 @@ async def test_attach_leaves_missing_structured_alone(settings: Settings) -> Non
     )
     assert result.structured is None
     assert "note" in result.text
+
+
+# note_score + ranking
+
+
+def test_note_score_prefers_verified_recalled_recent() -> None:
+    from datetime import datetime, timezone
+
+    from asterixdb_mcp.tools.memory_notes import note_score
+
+    now = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    grounded = {"type": "Note", "source_query": "SELECT 1;", "valid_from": now.isoformat()}
+    bare = {"type": "Note", "valid_from": now.isoformat()}
+    assert note_score(grounded, now) > note_score(bare, now)
+
+    used = {"type": "Note", "recall_count": 20, "valid_from": now.isoformat()}
+    assert note_score(used, now) > note_score(bare, now)
+
+
+def test_note_score_freshness_decays_with_age() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from asterixdb_mcp.tools.memory_notes import note_score
+
+    now = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    fresh = {"type": "Note", "valid_from": now.isoformat()}
+    old = {"type": "Note", "valid_from": (now - timedelta(days=365)).isoformat()}
+    assert note_score(fresh, now) > note_score(old, now)
+
+
+def test_note_score_undated_row_ranks_as_old() -> None:
+    from datetime import datetime, timezone
+
+    from asterixdb_mcp.tools.memory_notes import note_score
+
+    now = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    undated = {"type": "Note"}
+    fresh = {"type": "Note", "valid_from": now.isoformat()}
+    assert note_score(undated, now) < note_score(fresh, now)
+
+
+async def test_fetch_note_rows_caps_and_ranks(settings: Settings) -> None:
+    from asterixdb_mcp.tools.memory_notes import MAX_ATTACHED_NOTES, fetch_note_rows
+
+    rows = [
+        {"subject": "D.s", "type": "Note", "text": f"note {i}", "recall_count": i}
+        for i in range(MAX_ATTACHED_NOTES + 3)
+    ]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    got = await fetch_note_rows(cap.client, "ccid", ["D.s"])
+    assert len(got) == MAX_ATTACHED_NOTES
+    # Highest recall_count ranks first.
+    assert got[0]["recall_count"] == MAX_ATTACHED_NOTES + 2
+
+
+# reinforcement on delivery
+
+
+async def test_delivery_reinforces_when_writes_enabled(settings: Settings) -> None:
+    import json
+
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    rows = [{"id": "D.s@t0", "subject": "D.s", "type": "Note", "text": "note"}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(text="ok", structured={"status": "success"})
+
+    await attach_statement_notes(
+        cap.client, "ccid", "SELECT * FROM D.s;", base, settings=settings
+    )
+
+    upserts = [
+        parse_qs(r.content.decode())
+        for r in cap.requests
+        if "UPSERT" in parse_qs(r.content.decode())["statement"][0]
+    ]
+    assert len(upserts) == 1
+    bumped = json.loads(upserts[0]["$row"][0])
+    assert bumped["id"] == "D.s@t0"  # same row, not a new bi-temporal version
+    assert bumped["recall_count"] == 1
+    assert bumped["last_recalled_at"]
+
+
+async def test_no_reinforcement_when_writes_disabled(settings: Settings) -> None:
+    rows = [{"id": "D.s@t0", "subject": "D.s", "type": "Note", "text": "note"}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(text="ok", structured={"status": "success"})
+
+    await attach_statement_notes(
+        cap.client, "ccid", "SELECT * FROM D.s;", base, settings=settings
+    )
+
+    statements = [parse_qs(r.content.decode())["statement"][0] for r in cap.requests]
+    assert not any("UPSERT" in s for s in statements)  # read-only: no bump
+
+
+def test_note_score_naive_last_recalled_treated_as_utc() -> None:
+    from datetime import datetime, timezone
+
+    from asterixdb_mcp.tools.memory_notes import note_score
+
+    now = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    naive = {"type": "Note", "last_recalled_at": "2026-07-20T00:00:00"}  # no offset
+    aware = {"type": "Note", "last_recalled_at": "2026-07-20T00:00:00+00:00"}
+    assert note_score(naive, now) == note_score(aware, now)
+
+
+async def test_reinforce_degrades_on_store_error(settings: Settings) -> None:
+    from asterixdb_mcp.errors import ErrorType, GatewayError
+    from asterixdb_mcp.tools.memory_notes import reinforce_notes
+
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and "UPSERT" in request.content.decode():
+            return httpx.Response(200, json={"status": "fatal", "errors": [{"msg": "down"}]})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    cap = make_capturing_cc(settings, handler=boom)
+    rows = [{"id": "D.s@t0", "subject": "D.s", "type": "Note", "text": "note"}]
+    # Must not raise: reinforcement is best-effort metadata.
+    await reinforce_notes(cap.client, "ccid", rows)
+    _ = (ErrorType, GatewayError)  # imported to document the swallowed type

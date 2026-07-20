@@ -11,16 +11,29 @@ never break the primary tool, so every failure path degrades to "no notes".
 
 from __future__ import annotations
 
+import math
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from ..cc_client import CCClient
+from ..config import Settings
 from ..errors import GatewayError
 from . import ToolResult
 from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
 
 MAX_NOTE_SUBJECTS = 4
 MAX_NOTE_LEN = 500
+
+# Recall ranking: with many notes on the touched datasets, only the strongest
+# attach — evidence-backed knowledge outranks assertions, and notes that keep
+# proving useful (recalled often, recently) outrank ones nothing ever reads.
+MAX_ATTACHED_NOTES = 6
+VERIFIED_WEIGHT = 2.0
+FRESHNESS_HALF_LIFE_DAYS = 30.0
+_UNKNOWN_AGE_DAYS = FRESHNESS_HALF_LIFE_DAYS * 12  # undated notes rank as old
+
+_REINFORCE_UPSERT = f"UPSERT INTO {MEMORY_DATASET} ([$row]);"
 
 # Appended to schema/sample results when a dataset has no learned notes yet, so
 # the write-side of the memory loop is prompted exactly where exploration happens.
@@ -49,10 +62,14 @@ _FROM_RE = re.compile(
 )
 
 
-async def fetch_memory_notes(
+async def fetch_note_rows(
     client: CCClient, ccid: str, subjects: list[str]
 ) -> list[dict[str, Any]]:
-    """Return current learned notes for the given concept subjects (best-effort)."""
+    """Current note-bearing memory rows for the given subjects, ranked by score.
+
+    Best-effort: any store failure degrades to no rows. The result is capped at
+    MAX_ATTACHED_NOTES, strongest first (see ``note_score``).
+    """
     wanted: list[str] = []
     for subject in subjects:
         if subject and _IDENTIFIER_RE.match(subject) and subject not in wanted:
@@ -67,14 +84,74 @@ async def fetch_memory_notes(
         )
     except GatewayError:
         return []
-    notes: list[dict[str, Any]] = []
-    for row in envelope.get("results", []):
-        if not isinstance(row, dict):
-            continue
-        text = _note_text(row)
-        if text:
-            notes.append({"subject": row.get("subject"), "note": text, "grounded": _grounded(row)})
-    return notes
+    rows = [
+        row for row in envelope.get("results", []) if isinstance(row, dict) and _note_text(row)
+    ]
+    now = datetime.now(timezone.utc)
+    ranked = sorted(rows, key=lambda row: note_score(row, now), reverse=True)
+    return ranked[:MAX_ATTACHED_NOTES]
+
+
+def display_notes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The delivery shape of note rows: subject, note text, evidence status."""
+    return [
+        {"subject": row.get("subject"), "note": _note_text(row), "grounded": _grounded(row)}
+        for row in rows
+    ]
+
+
+async def fetch_memory_notes(
+    client: CCClient, ccid: str, subjects: list[str]
+) -> list[dict[str, Any]]:
+    """Return current learned notes for the given concept subjects (best-effort)."""
+    return display_notes(await fetch_note_rows(client, ccid, subjects))
+
+
+def note_score(row: dict[str, Any], now: datetime) -> float:
+    """Recall-utility score: evidence + usage + freshness.
+
+    Walk-owned concepts and grounded notes carry the verified weight; usage
+    grows logarithmically with recall_count; freshness decays with the days
+    since the note was last recalled (or written).
+    """
+    verified = VERIFIED_WEIGHT if _is_walk_owned(row) or row.get("source_query") else 0.0
+    usage = math.log1p(float(row.get("recall_count") or 0))
+    freshness = 1.0 / (1.0 + _age_days(row, now) / FRESHNESS_HALF_LIFE_DAYS)
+    return verified + usage + freshness
+
+
+def _age_days(row: dict[str, Any], now: datetime) -> float:
+    stamp = row.get("last_recalled_at") or row.get("valid_from")
+    try:
+        then = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return _UNKNOWN_AGE_DAYS
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return max((now - then).total_seconds() / 86400.0, 0.0)
+
+
+async def reinforce_notes(client: CCClient, ccid: str, rows: list[dict[str, Any]]) -> None:
+    """Bump usage counters on rows whose notes were just delivered (best-effort).
+
+    The bump rewrites the SAME row id with recall_count/last_recalled_at
+    updated — usage is metadata, not new knowledge, so it must not create
+    bi-temporal churn. Concurrent bumps are last-writer-wins; the counters are
+    approximate by design.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        bumped = {
+            **row,
+            "recall_count": int(row.get("recall_count") or 0) + 1,
+            "last_recalled_at": now,
+        }
+        try:
+            await client.execute_memory_write(
+                _REINFORCE_UPSERT, client_context_id=ccid, statement_parameters={"row": bumped}
+            )
+        except GatewayError:
+            return
 
 
 class RecallState:
@@ -118,21 +195,27 @@ async def attach_statement_notes(
     result: ToolResult,
     recall: RecallState | None = None,
     first_use_only: bool = False,
+    settings: Settings | None = None,
 ) -> ToolResult:
     """Append learned notes for the statement's datasets to a tool result.
 
     With a RecallState and first_use_only, notes are attached only for datasets
     not yet covered this session; either way the subjects actually delivered
-    are recorded so later attachments do not repeat them.
+    are recorded so later attachments do not repeat them. When ``settings``
+    allows memory writes, delivery also reinforces the delivered rows' usage
+    counters, feeding the recall-utility score and the decay pass.
     """
     subjects = subjects_from_statement(statement)
     if recall is not None and first_use_only:
         subjects = recall.fresh(subjects)
-    notes = await fetch_memory_notes(client, ccid, subjects)
+    rows = await fetch_note_rows(client, ccid, subjects)
+    notes = display_notes(rows)
     if not notes:
         return result
     if recall is not None:
         recall.mark([str(n["subject"]) for n in notes if n.get("subject")])
+    if settings is not None and settings.memory_write_enabled:
+        await reinforce_notes(client, ccid, rows)
     structured = result.structured
     if structured is not None:
         structured = {**structured, "learnedNotes": notes}

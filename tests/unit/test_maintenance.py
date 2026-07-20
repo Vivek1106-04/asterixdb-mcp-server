@@ -127,7 +127,7 @@ async def test_timeout_is_bounded_and_swallowed(
 
 async def test_steps_degrade_independently(monkeypatch: pytest.MonkeyPatch) -> None:
     # bootstrap and walk fail with GatewayError (e.g. no okf_catalog on the
-    # cluster); distill must still run.
+    # cluster); decay and distill must still run.
     from asterixdb_mcp.errors import ErrorType, GatewayError
 
     order: list[str] = []
@@ -136,15 +136,20 @@ async def test_steps_degrade_independently(monkeypatch: pytest.MonkeyPatch) -> N
         order.append("failing")
         raise GatewayError(ErrorType.INTERNAL, "unavailable")
 
+    async def ok_decay(*args: object, **kwargs: object) -> dict[str, int]:
+        order.append("decay")
+        return {"candidates": 0, "archived": 0}
+
     async def ok_distill(*args: object, **kwargs: object) -> dict[str, int]:
         order.append("distill")
         return {"events": 0}
 
     monkeypatch.setattr(maintenance, "bootstrap_store", failing)
     monkeypatch.setattr(maintenance, "run_walk", failing)
+    monkeypatch.setattr(maintenance, "run_decay", ok_decay)
     monkeypatch.setattr(maintenance, "run_distill", ok_distill)
     await maintenance._maintenance_pass(_enabled_settings())
-    assert order == ["failing", "failing", "distill"]
+    assert order == ["failing", "failing", "decay", "distill"]
 
 
 def test_lock_path_is_temp_scoped_and_cluster_keyed() -> None:
