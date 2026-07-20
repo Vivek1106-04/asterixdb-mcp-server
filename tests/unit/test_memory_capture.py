@@ -272,3 +272,87 @@ async def test_flush_survives_undeletable_buffer(
         cap.client, settings, CaptureState(), statement=FIX, result_error=None
     )
     assert len(cap.requests) == 2  # live + replayed; failed unlink swallowed
+
+# event enrichment (client identity + performance metrics)
+
+
+def test_elapsed_ms_parses_cc_duration_strings() -> None:
+    from asterixdb_mcp.tools.memory_capture import _elapsed_ms
+
+    assert _elapsed_ms({"elapsedTime": "377.644875ms"}) == 377.645
+    assert _elapsed_ms({"elapsedTime": "2.233s"}) == 2233.0
+    assert _elapsed_ms({"elapsedTime": "150ns"}) == 0.0
+    assert _elapsed_ms({"elapsedTime": "not-a-duration"}) is None
+    assert _elapsed_ms({}) is None
+    assert _elapsed_ms(None) is None
+
+
+async def test_events_carry_client_and_metrics(settings: Settings, tmp_path: Path) -> None:
+    settings = settings.model_copy(update={"session_log_dir": str(tmp_path)})
+    cap = make_capturing_cc(settings)
+
+    await capture_query_outcome(
+        cap.client,
+        settings,
+        CaptureState(),
+        statement=FIX,
+        result_error=None,
+        client_name="claude-desktop/1.2",
+        metrics={"elapsedTime": "1.5s", "processedObjects": 908915},
+    )
+
+    log = tmp_path / f"{settings.agent_session_id}.jsonl"
+    event = json.loads(log.read_text().splitlines()[0])
+    assert event["client"] == "claude-desktop/1.2"
+    assert event["elapsed_ms"] == 1500.0
+    assert event["processed_objects"] == 908915
+
+
+async def test_flush_replays_buffers_from_other_sessions(
+    settings: Settings, tmp_path: Path
+) -> None:
+    # A crashed process leaves a buffer under ITS unique session id; the next
+    # healthy session must still flush it to the cluster.
+    settings = settings.model_copy(
+        update={"memory_write_enabled": True, "session_log_dir": str(tmp_path)}
+    )
+    stale = {
+        "id": "old-session@1",
+        "session": "old-session",
+        "statement": "SELECT 1;",
+        "outcome": "success",
+    }
+    (tmp_path / "old-session.jsonl").write_text(json.dumps(stale) + "\n")
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+
+    await capture_query_outcome(
+        cap.client, settings, CaptureState(), statement=FIX, result_error=None
+    )
+
+    rows = [
+        json.loads(parse_qs(r.content.decode())["$row"][0])
+        for r in cap.requests
+        if "SessionEvent" in parse_qs(r.content.decode())["statement"][0]
+    ]
+    assert any(row["id"] == "old-session@1" for row in rows)
+    assert not (tmp_path / "old-session.jsonl").exists()
+
+
+async def test_flush_degrades_when_log_dir_unlistable(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = settings.model_copy(
+        update={"memory_write_enabled": True, "session_log_dir": str(tmp_path)}
+    )
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+
+    def unlistable(self: Path, pattern: str) -> list[Path]:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "glob", unlistable)
+    # Must not raise: the current event still lands, the flush quietly skips.
+    await capture_query_outcome(
+        cap.client, settings, CaptureState(), statement=FIX, result_error=None
+    )
+    statements = [parse_qs(r.content.decode())["statement"][0] for r in cap.requests]
+    assert any("SessionEvent" in s for s in statements)

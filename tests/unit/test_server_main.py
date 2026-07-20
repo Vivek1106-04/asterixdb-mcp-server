@@ -103,3 +103,45 @@ def test_main_runs_startup_maintenance_before_serving(
 
     server_module.main()
     assert order == ["maintenance", "serve"]
+
+
+# _client_identity (handshake provenance)
+
+
+def _fake_mcp(client_params: object) -> object:
+    from types import SimpleNamespace
+
+    ctx = SimpleNamespace(session=SimpleNamespace(client_params=client_params))
+    return SimpleNamespace(get_context=lambda: ctx)
+
+
+def test_client_identity_reads_handshake_info() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from asterixdb_mcp.server import _client_identity
+
+    info = SimpleNamespace(name="claude-desktop", version="1.2")
+    fake = cast(Any, _fake_mcp(SimpleNamespace(clientInfo=info)))
+    assert _client_identity(fake) == "claude-desktop/1.2"
+
+
+def test_client_identity_handles_missing_pieces() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from asterixdb_mcp.server import _client_identity
+
+    # No version: name alone. No clientInfo / blank name / no context: None.
+    named_only = SimpleNamespace(name="antigravity", version="")
+    fake = cast(Any, _fake_mcp(SimpleNamespace(clientInfo=named_only)))
+    assert _client_identity(fake) == "antigravity"
+    assert _client_identity(cast(Any, _fake_mcp(SimpleNamespace(clientInfo=None)))) is None
+    blank = SimpleNamespace(name="  ", version="1")
+    assert _client_identity(cast(Any, _fake_mcp(SimpleNamespace(clientInfo=blank)))) is None
+
+    def boom() -> object:
+        raise ValueError("no active request context")
+
+    outside = SimpleNamespace(get_context=boom)
+    assert _client_identity(cast(Any, outside)) is None

@@ -551,3 +551,112 @@ async def test_fetch_includes_egress_and_signature(settings: Settings, audit: Au
     )
     assert result.structured["egress"]["truncated"] is False
     assert result.structured["signature"] == {"name": ["x"]}
+
+
+# terminal-status memory capture
+
+
+def _capture_handler(status: str):
+    """GET status polls report the terminal status; POSTs (event inserts) succeed."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"status": status})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    return handler
+
+
+async def test_wait_timeout_feeds_memory_capture(
+    settings: Settings, audit: AuditLog, pools: PermitPools
+) -> None:
+    from asterixdb_mcp.tools.memory_capture import CaptureState
+
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    failing = "SELECT c FROM ShopDV.customers b UNNEST b.tags c;"
+    audit.record(
+        AuditEntry("sess-test::_::u", "sess-test", failing, audit.now(), handle="/status/0-1")
+    )
+    cap = make_capturing_cc(settings, handler=_capture_handler("timeout"))
+    state = CaptureState()
+
+    result = await run_wait_on_async_query(
+        cap.client,
+        settings,
+        audit,
+        pools,
+        client_context_id="sess-test::_::u",
+        capture=state,
+        client_name="antigravity/1.0",
+    )
+
+    assert result.is_error is True
+    from urllib.parse import parse_qs
+
+    inserts = [
+        parse_qs(r.content.decode())
+        for r in cap.requests
+        if r.method == "POST" and "SessionEvent" in parse_qs(r.content.decode())["statement"][0]
+    ]
+    assert len(inserts) == 1
+    import json as _json
+
+    event = _json.loads(inserts[0]["$row"][0])
+    assert event["outcome"] == "error"
+    assert event["error"] == "TIMEOUT"
+    assert event["statement"] == failing
+    assert event["client"] == "antigravity/1.0"
+    # The failure is pending in CaptureState: a later working form pairs with it.
+    fixed = "SELECT c FROM ShopDV.customers b UNNEST split(b.tags, ',') c;"
+    expected_note = (
+        f"A query on this dataset failed (TIMEOUT): {failing} | working form: {fixed}"
+    )
+    assert state.record(fixed, None) == [("ShopDV.customers", expected_note)]
+
+
+async def test_wait_success_records_success_event(
+    settings: Settings, audit: AuditLog, pools: PermitPools
+) -> None:
+    from asterixdb_mcp.tools.memory_capture import CaptureState
+
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    audit.record(
+        AuditEntry("sess-test::_::u", "sess-test", "SELECT 1;", audit.now(), handle="/status/0-1")
+    )
+    cap = make_capturing_cc(settings, handler=_capture_handler("success"))
+
+    result = await run_wait_on_async_query(
+        cap.client,
+        settings,
+        audit,
+        pools,
+        client_context_id="sess-test::_::u",
+        capture=CaptureState(),
+    )
+
+    assert result.structured["done"] is True
+    from urllib.parse import parse_qs
+
+    inserts = [
+        parse_qs(r.content.decode())
+        for r in cap.requests
+        if r.method == "POST" and "SessionEvent" in parse_qs(r.content.decode())["statement"][0]
+    ]
+    assert len(inserts) == 1
+    import json as _json
+
+    event = _json.loads(inserts[0]["$row"][0])
+    assert event["outcome"] == "success"
+    assert "error" not in event
+
+
+async def test_wait_without_capture_records_nothing(
+    settings: Settings, audit: AuditLog, pools: PermitPools
+) -> None:
+    _seed_submission(audit)
+    cap = make_capturing_cc(settings, response_json={"status": "success"})
+    result = await run_wait_on_async_query(
+        cap.client, settings, audit, pools, client_context_id="sess-test::_::u"
+    )
+    assert result.structured["done"] is True
+    assert all(r.method == "GET" for r in cap.requests)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from urllib.parse import parse_qs
 
 import httpx
@@ -462,3 +463,21 @@ async def test_bootstrap_ddl_allowed_by_exact_match_only(write_settings: Setting
         await cap.client.execute_memory_write(
             BOOTSTRAP_STATEMENTS[0] + " ", client_context_id="sess::t::1"
         )
+
+
+async def test_author_is_stamped_on_written_row(settings: Settings) -> None:
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+
+    result = await run_memory_write(
+        cap.client,
+        settings,
+        subject="ShopDV.orders",
+        text="Orders ship_date is a string.",
+        author="claude-desktop/1.2",
+    )
+
+    assert result.structured["status"] == "success"
+    insert_form = parse_qs(cap.requests[-1].content.decode())
+    row = json.loads(insert_form["$row"][0])
+    assert row["author"] == "claude-desktop/1.2"

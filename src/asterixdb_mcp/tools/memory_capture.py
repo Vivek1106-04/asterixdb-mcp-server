@@ -27,6 +27,7 @@ cluster, or an unwritable log never surfaces to the caller.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -46,6 +47,10 @@ MAX_WARNING_LEN = 200
 
 SESSION_EVENT_DATASET = "AgentMemory.SessionEvent"
 _EVENT_INSERT = f"INSERT INTO {SESSION_EVENT_DATASET} ([$row]);"
+
+# CC metrics report durations as strings like "377.644875ms" or "2.233s".
+_DURATION_RE = re.compile(r"^([\d.]+)(ns|µs|us|ms|s)$")
+_DURATION_TO_MS = {"ns": 1e-6, "µs": 1e-3, "us": 1e-3, "ms": 1.0, "s": 1000.0}
 
 
 @dataclass
@@ -101,16 +106,27 @@ async def capture_query_outcome(
     *,
     statement: str,
     result_error: str | None,
+    client_name: str | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> None:
     """Feed one query outcome through capture and persist any distilled notes."""
-    await _record_session_event(client, settings, statement, result_error)
+    await _record_session_event(
+        client, settings, statement, result_error, client_name=client_name, metrics=metrics
+    )
     if not settings.memory_write_enabled:
         return
     for subject, note in capture.record(statement, result_error):
         # run_memory_write returns an error ToolResult rather than raising;
         # capture never lets a failed note write surface to the caller. The
         # working statement doubles as grounding evidence for revalidation.
-        await run_memory_write(client, settings, subject=subject, text=note, source_query=statement)
+        await run_memory_write(
+            client,
+            settings,
+            subject=subject,
+            text=note,
+            source_query=statement,
+            author=client_name,
+        )
 
 
 def _fix_note(pending: _PendingFailure, statement: str) -> str:
@@ -130,7 +146,14 @@ def _trim(statement: str) -> str:
 # episodic session events
 
 
-def _build_event(settings: Settings, statement: str, result_error: str | None) -> dict[str, Any]:
+def _build_event(
+    settings: Settings,
+    statement: str,
+    result_error: str | None,
+    *,
+    client_name: str | None = None,
+    metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     event: dict[str, Any] = {
         "id": f"{settings.agent_session_id}@{time.time()}-{uuid.uuid4().hex[:8]}",
         "ts": time.time(),
@@ -140,14 +163,39 @@ def _build_event(settings: Settings, statement: str, result_error: str | None) -
     }
     if result_error is not None:
         event["error"] = result_error
+    if client_name:
+        event["client"] = client_name
+    elapsed = _elapsed_ms(metrics)
+    if elapsed is not None:
+        event["elapsed_ms"] = elapsed
+    if metrics and isinstance(metrics.get("processedObjects"), int):
+        event["processed_objects"] = metrics["processedObjects"]
     return event
 
 
+def _elapsed_ms(metrics: dict[str, Any] | None) -> float | None:
+    """Parse the CC's elapsedTime duration string into milliseconds, if present."""
+    if not metrics:
+        return None
+    match = _DURATION_RE.match(str(metrics.get("elapsedTime", "")))
+    if match is None:
+        return None
+    return round(float(match.group(1)) * _DURATION_TO_MS[match.group(2)], 3)
+
+
 async def _record_session_event(
-    client: CCClient, settings: Settings, statement: str, result_error: str | None
+    client: CCClient,
+    settings: Settings,
+    statement: str,
+    result_error: str | None,
+    *,
+    client_name: str | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> None:
     """Record one episodic event: cluster first, JSONL buffer as the fallback."""
-    event = _build_event(settings, statement, result_error)
+    event = _build_event(
+        settings, statement, result_error, client_name=client_name, metrics=metrics
+    )
     if settings.memory_write_enabled:
         try:
             await _insert_event(client, settings, event)
@@ -166,14 +214,26 @@ async def _insert_event(client: CCClient, settings: Settings, event: dict[str, A
 
 
 async def _flush_buffered_events(client: CCClient, settings: Settings) -> None:
-    """Replay events buffered while the cluster was unreachable, then drop the buffer.
+    """Replay events buffered while the cluster was unreachable, then drop the buffers.
 
-    A failure mid-flush leaves the remaining lines in place for the next attempt;
-    duplicate replays are tolerable because distillation deduplicates by event id.
+    Every ``*.jsonl`` file in the log directory is replayed — session ids are
+    per-process, so a crashed session's buffer has a different name than ours
+    and would otherwise be stranded forever. A failure mid-flush leaves the
+    remaining lines in place for the next attempt; duplicate replays are
+    tolerable because distillation deduplicates by event id.
     """
-    path = _buffer_path(settings)
-    if path is None or not path.exists():
+    if not settings.session_log_dir:
         return
+    directory = Path(settings.session_log_dir)
+    try:
+        buffers = sorted(directory.glob("*.jsonl"))
+    except OSError:
+        return
+    for path in buffers:
+        await _flush_one_buffer(client, settings, path)
+
+
+async def _flush_one_buffer(client: CCClient, settings: Settings, path: Path) -> None:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:

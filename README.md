@@ -112,9 +112,13 @@ against the same dataset succeeds in the same session, the error->fix pair is
 distilled into a learned note on that dataset's concept — no model involvement
 (requires memory writes enabled). Failure means more than a raised error: a
 query that runs but returns 0 rows WITH type-mismatch warnings is treated as a
-silent semantic miss and captured the same way. Every query outcome is also
-recorded as one episodic event — into `AgentMemory.SessionEvent` on the
-cluster when memory writes are enabled, with the per-session JSONL file under
+silent semantic miss and captured the same way, and an async query that ends
+in a terminal `timeout`/`failed`/`fatal` status feeds the same pipeline as a
+synchronous error. Every query outcome is also
+recorded as one episodic event — carrying the connected client's identity
+(from the MCP handshake) and the query's performance metrics — into
+`AgentMemory.SessionEvent` on the cluster when memory writes are enabled,
+with the per-session JSONL file under
 `ASTERIXDB_MCP_SESSION_LOG_DIR` acting as the offline buffer (buffered events
 flush to the cluster on the next successful write). `scripts/memory_distill.py`
 distills the cross-session signal from both sources: queries proven across
@@ -211,7 +215,7 @@ All settings come from environment variables (prefix `ASTERIXDB_MCP_`):
 |----------|---------|---------|
 | `ASTERIXDB_MCP_CC_BASE_URL` | `http://localhost:19002` | CC REST base URL. |
 | `ASTERIXDB_MCP_CC_SHARED_SECRET` | _(unset)_ | Optional `X-Gateway-Secret` header on the CC hop. |
-| `ASTERIXDB_MCP_AGENT_SESSION_ID` | `local-session` | Leading segment of the namespaced context id. |
+| `ASTERIXDB_MCP_AGENT_SESSION_ID` | `local-session` | Session-id prefix; each gateway process appends a unique suffix so repeated launches count as distinct sessions in distillation. |
 | `ASTERIXDB_MCP_MAX_TIME_MS` | `30000` | Egress layer 1: per-query wall-clock ceiling. |
 | `ASTERIXDB_MCP_MAX_BYTES_PER_QUERY` | `10485760` | Egress layer 2: max response bytes buffered. |
 | `ASTERIXDB_MCP_REQUEST_TIMEOUT_S` | `35.0` | httpx transport timeout for the CC hop. |

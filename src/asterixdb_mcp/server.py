@@ -509,6 +509,31 @@ def _text_with_payload(result: ToolResult) -> str:
     return f"{result.text}\n\n```json\n{payload}\n```"
 
 
+def _client_identity(mcp: FastMCP) -> str | None:
+    """Best-effort "name/version" of the connected MCP client, from the handshake.
+
+    Used purely as provenance on memory rows and session events. Outside a
+    request context (or with a client that sent no clientInfo) there is no
+    identity — provenance is additive, so None is always acceptable.
+    """
+    try:
+        params = mcp.get_context().session.client_params
+    except Exception:
+        return None
+    info = getattr(params, "clientInfo", None)
+    if info is None:
+        return None
+    name = str(getattr(info, "name", "") or "").strip()
+    if not name:
+        return None
+    version = str(getattr(info, "version", "") or "").strip()
+    identity = f"{name}/{version}" if version else name
+    return identity[:MAX_CLIENT_IDENTITY_LEN]
+
+
+MAX_CLIENT_IDENTITY_LEN = 80
+
+
 def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> FastMCP:
     """Construct the FastMCP app and register the tool/resource/prompt surface.
 
@@ -620,6 +645,8 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             capture,
             statement=statement,
             result_error=capture_error_signal(result),
+            client_name=_client_identity(mcp),
+            metrics=(result.structured or {}).get("metrics"),
         )
         return _to_call_tool_result(result)
 
@@ -746,6 +773,8 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             pools,
             client_context_id=clientContextID,
             timeout_ms=timeoutMs,
+            capture=capture,
+            client_name=_client_identity(mcp),
         )
         return _to_call_tool_result(result)
 
@@ -992,6 +1021,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             tags=tags,
             source_query=source_query,
             replaces=replaces,
+            author=_client_identity(mcp),
         )
         return _to_call_tool_result(result)
 
