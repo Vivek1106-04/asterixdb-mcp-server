@@ -94,6 +94,12 @@ supersedes rows that fall below the trust floor (forgetting, with history
 retained). `memory_search` accepts `link_depth` (1–2) to pull multi-hop
 connected context along the concept link graph.
 
+Recall is ranked and self-reinforcing: when a query touches datasets with many
+notes, only the strongest attach (grounded knowledge and notes that keep
+proving useful outrank unread assertions), and every delivery bumps the
+delivered rows' usage counters — which feed both the ranking and the decay
+pass, so useful notes stay and dead weight ages out.
+
 `memory_write` is the one agent-facing write surface: it persists a curated
 note bi-temporally — new subjects become standalone note concepts, notes on
 catalog concepts land in the learned overlay and survive refreshes. It is off
@@ -134,7 +140,9 @@ maintenance pass** on every launch (any transport): it creates the AgentMemory
 store if absent (only the exact canonical `IF NOT EXISTS` DDL is allowed
 through the write guard, byte-for-byte), re-walks `okf_catalog()` so the
 concept store tracks schema changes automatically (idempotent — an unchanged
-catalog writes nothing; overlays always survive), and runs one distill pass.
+catalog writes nothing; overlays always survive), runs a decay pass that
+archives dead-weight notes (standalone, unverified, and never recalled within
+30 days) bi-temporally so history keeps them, and runs one distill pass.
 Concurrent gateway instances elect a single runner via an exclusive lock file
 (0600, stale-broken after 10 minutes), the whole pass is capped at 60 seconds,
 and every step degrades gracefully — a cluster without `okf_catalog()` simply
