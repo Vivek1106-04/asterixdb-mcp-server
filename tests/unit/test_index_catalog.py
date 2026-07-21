@@ -133,3 +133,46 @@ async def test_fetch_detailed_degrades_to_empty_on_failure(settings: Settings) -
 
     cap = make_capturing_cc(settings, handler=handler)
     assert await fetch_indexes_detailed(cap.client, "ccid", dataverse="Shop") == []
+
+
+# ANALYZE sample-index exclusion
+
+
+def test_is_sample_index_matches_only_the_analyze_sample() -> None:
+    from asterixdb_mcp.index_catalog import is_sample_index
+
+    assert is_sample_index({"IndexName": "sample_idx_1_Business", "IndexStructure": "SAMPLE"})
+    assert not is_sample_index({"IndexName": "byCity", "IndexStructure": "BTREE"})
+    assert not is_sample_index({"IndexName": "noStructure"})  # missing field is not a sample
+
+
+def test_catalog_queries_exclude_the_sample_index() -> None:
+    from asterixdb_mcp.index_catalog import (
+        ALL_SECONDARY_INDEXES_QUERY,
+        EXCLUDE_SAMPLE_SQL,
+    )
+
+    assert EXCLUDE_SAMPLE_SQL in ALL_SECONDARY_INDEXES_QUERY
+    # A record without IndexStructure must survive the predicate rather than be
+    # dropped by a MISSING comparison.
+    assert "IS UNKNOWN" in EXCLUDE_SAMPLE_SQL
+
+
+async def test_fetch_secondary_indexes_filters_sample_in_sql(settings: Settings) -> None:
+    from asterixdb_mcp.index_catalog import EXCLUDE_SAMPLE_SQL
+
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    await fetch_secondary_indexes(cap.client, "ccid")
+    await fetch_secondary_indexes(cap.client, "ccid", dataverse="Yelp")
+    statements = [parse_qs(r.content.decode())["statement"][0] for r in cap.requests]
+    assert len(statements) == 2
+    assert all(EXCLUDE_SAMPLE_SQL in s for s in statements)
+
+
+async def test_fetch_indexes_detailed_filters_sample_in_sql(settings: Settings) -> None:
+    from asterixdb_mcp.index_catalog import EXCLUDE_SAMPLE_SQL
+
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": []})
+    await fetch_indexes_detailed(cap.client, "ccid", dataverse="Yelp", dataset="Business")
+    statement = parse_qs(cap.requests[0].content.decode())["statement"][0]
+    assert EXCLUDE_SAMPLE_SQL in statement

@@ -20,9 +20,30 @@ from typing import Any
 from .cc_client import CCClient
 from .errors import GatewayError
 
+# ANALYZE auto-creates one SAMPLE index per analyzed dataset to hold the
+# optimizer's statistics sample (``sample_idx_1_<dataset>``). It is an internal
+# CBO artifact with IsPrimary=false, not a user access path: it can never be
+# chosen for a query, dropped, or recommended, so every index-facing surface
+# hides it. ``sample_stats`` reads it deliberately for cardinality and is the
+# one place that must NOT filter.
+SAMPLE_INDEX_STRUCTURE = "SAMPLE"
+# SQL++ fragment (alias ``i``). The IS UNKNOWN arm keeps a record that somehow
+# lacks IndexStructure visible — a missing field would make a bare `!=` compare
+# to MISSING and silently drop the row.
+EXCLUDE_SAMPLE_SQL = (
+    f'(i.IndexStructure IS UNKNOWN OR i.IndexStructure != "{SAMPLE_INDEX_STRUCTURE}")'
+)
+
 # Secondary indexes only; the primary index is implicit and never recommended on
-# or reported against.
-ALL_SECONDARY_INDEXES_QUERY = "SELECT VALUE i FROM Metadata.`Index` i WHERE i.IsPrimary = false;"
+# or reported against, and the ANALYZE sample index is not an access path.
+ALL_SECONDARY_INDEXES_QUERY = (
+    f"SELECT VALUE i FROM Metadata.`Index` i WHERE i.IsPrimary = false AND {EXCLUDE_SAMPLE_SQL};"
+)
+
+
+def is_sample_index(row: dict[str, Any]) -> bool:
+    """True for the ANALYZE statistics-sample index (never a user access path)."""
+    return row.get("IndexStructure") == SAMPLE_INDEX_STRUCTURE
 
 
 @dataclass(frozen=True)
@@ -174,7 +195,8 @@ async def fetch_indexes_detailed(
     yields an empty catalog document rather than a protocol-level error.
     """
     statement = (
-        "SELECT VALUE i FROM Metadata.`Index` i WHERE i.IsPrimary = false AND i.DataverseName = $dv"
+        "SELECT VALUE i FROM Metadata.`Index` i "
+        f"WHERE i.IsPrimary = false AND {EXCLUDE_SAMPLE_SQL} AND i.DataverseName = $dv"
     )
     parameters: dict[str, Any] = {"dv": dataverse}
     if dataset is not None:
@@ -208,7 +230,7 @@ async def fetch_secondary_indexes(
     if dataverse is not None:
         statement = (
             "SELECT VALUE i FROM Metadata.`Index` i "
-            "WHERE i.IsPrimary = false AND i.DataverseName = $dv;"
+            f"WHERE i.IsPrimary = false AND {EXCLUDE_SAMPLE_SQL} AND i.DataverseName = $dv;"
         )
         parameters = {"dv": dataverse}
     try:

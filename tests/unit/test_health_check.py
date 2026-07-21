@@ -205,3 +205,11 @@ async def test_run_surfaces_cc_error(settings: Settings) -> None:
     result = await run_database_health_check(cap.client, settings)
     assert result.is_error
     assert result.structured["errorType"] == ErrorType.INTERNAL.value
+
+
+def test_index_query_excludes_the_analyze_sample() -> None:
+    from asterixdb_mcp.index_catalog import EXCLUDE_SAMPLE_SQL
+    from asterixdb_mcp.tools.health_check import _ALL_INDEXES_QUERY
+
+    # The sample index is not actionable and would inflate indexesScanned.
+    assert EXCLUDE_SAMPLE_SQL in _ALL_INDEXES_QUERY

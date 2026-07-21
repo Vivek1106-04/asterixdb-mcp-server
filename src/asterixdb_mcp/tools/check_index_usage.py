@@ -24,13 +24,15 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError, classify_cc_error
+from ..index_catalog import EXCLUDE_SAMPLE_SQL
 from ..plan_parser import datasets_from_sources, parse_optimized_plan
 from ..statement_guard import check_unsupported_functions, strip_set_prefix
 from . import ToolResult
 
 _INDEX_QUERY = (
     "SELECT VALUE i FROM Metadata.`Index` i "
-    "WHERE i.DataverseName = $dv AND i.DatasetName = $ds AND i.IsPrimary = false;"
+    "WHERE i.DataverseName = $dv AND i.DatasetName = $ds AND i.IsPrimary = false "
+    f"AND {EXCLUDE_SAMPLE_SQL};"
 )
 
 
