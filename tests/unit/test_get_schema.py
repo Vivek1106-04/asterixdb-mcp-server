@@ -225,3 +225,23 @@ async def test_schema_succeeds_when_memory_store_is_unreachable(settings: Settin
     assert "learnedNotes" not in result.structured
     assert "No learned notes exist for ShopDV.customers" in result.text
     assert "memory_write" in result.text
+
+
+def test_summarize_secondary_indexes_skips_primary_and_analyze_sample() -> None:
+    records = [
+        {"IndexName": "Business", "IndexStructure": "BTREE", "IsPrimary": True},
+        {
+            "IndexName": "sample_idx_1_Business",
+            "IndexStructure": "SAMPLE",
+            "IsPrimary": False,
+            "SearchKey": [["business_id"]],
+        },
+        {
+            "IndexName": "byCity",
+            "IndexStructure": "BTREE",
+            "IsPrimary": False,
+            "SearchKey": [["city"]],
+        },
+    ]
+    summary = summarize_secondary_indexes(records)
+    assert [s["indexName"] for s in summary] == ["byCity"]

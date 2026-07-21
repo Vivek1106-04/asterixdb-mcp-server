@@ -35,7 +35,7 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import GatewayError
-from ..index_catalog import normalize_search_key
+from ..index_catalog import EXCLUDE_SAMPLE_SQL, normalize_search_key
 from ..inventory import fetch_dataset_rows
 from . import ToolResult
 from .get_schema import extract_dataset_format_info
@@ -55,7 +55,9 @@ CHECK_COLUMNAR_CANDIDATE = "ROW_DATASET_COLUMNAR_CANDIDATE"
 
 CHECKS = (CHECK_DUPLICATE_INDEX, CHECK_REDUNDANT_INDEX, CHECK_COLUMNAR_CANDIDATE)
 
-_ALL_INDEXES_QUERY = "SELECT VALUE i FROM Metadata.`Index` i;"
+# The ANALYZE statistics sample is not an index a health finding can act on, and
+# counting it would inflate indexesScanned.
+_ALL_INDEXES_QUERY = f"SELECT VALUE i FROM Metadata.`Index` i WHERE {EXCLUDE_SAMPLE_SQL};"
 
 
 async def run_database_health_check(

@@ -18,6 +18,7 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
+from ..index_catalog import is_sample_index
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
 from ..naming import resolve
 from . import ToolResult
@@ -153,10 +154,14 @@ def extract_record_fields(datatype_record: dict[str, Any]) -> list[dict[str, Any
 
 
 def summarize_secondary_indexes(index_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Flatten secondary indexes (skip the primary) into a compact list."""
+    """Flatten secondary indexes into a compact list.
+
+    Skips the primary index (implicit) and the ANALYZE statistics sample, which
+    is an optimizer artifact rather than an access path the reader can use.
+    """
     summary: list[dict[str, Any]] = []
     for idx in index_records:
-        if not isinstance(idx, dict) or idx.get("IsPrimary"):
+        if not isinstance(idx, dict) or idx.get("IsPrimary") or is_sample_index(idx):
             continue
         summary.append(
             {

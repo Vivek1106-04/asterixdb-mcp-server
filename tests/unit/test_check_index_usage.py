@@ -217,3 +217,12 @@ async def test_compile_transport_error(settings: Settings) -> None:
     cap = make_capturing_cc(settings, handler=handler)
     result = await run_check_index_usage(cap.client, settings, statement="SELECT * FROM x LIMIT 1;")
     assert result.is_error is True
+
+
+def test_index_query_excludes_the_analyze_sample() -> None:
+    from asterixdb_mcp.index_catalog import EXCLUDE_SAMPLE_SQL
+    from asterixdb_mcp.tools.check_index_usage import _INDEX_QUERY
+
+    # The sample index can never be chosen by a plan, so it must not be
+    # reported as an unused index.
+    assert EXCLUDE_SAMPLE_SQL in _INDEX_QUERY
