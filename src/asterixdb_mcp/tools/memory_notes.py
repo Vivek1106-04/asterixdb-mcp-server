@@ -67,8 +67,12 @@ async def fetch_note_rows(
 ) -> list[dict[str, Any]]:
     """Current note-bearing memory rows for the given subjects, ranked by score.
 
-    Best-effort: any store failure degrades to no rows. The result is capped at
-    MAX_ATTACHED_NOTES, strongest first (see ``note_score``).
+    Direct subject hits are followed one hop across their ``links`` so a
+    dataset's query brings in the learned notes on its related concepts (its
+    indexes and datatype) too — only linked concepts that actually carry a
+    learned note contribute. Best-effort: any store failure degrades to no
+    rows. The combined pool is capped at MAX_ATTACHED_NOTES, strongest first
+    (see ``note_score``).
     """
     wanted: list[str] = []
     for subject in subjects:
@@ -78,18 +82,56 @@ async def fetch_note_rows(
             break
     if not wanted:
         return []
+    direct = await _query_note_rows(client, ccid, wanted)
+    linked_subjects = _link_subjects(direct, seen=set(wanted))
+    pool = direct
+    if linked_subjects:
+        pool = _dedupe_rows(direct + await _query_note_rows(client, ccid, linked_subjects))
+    now = datetime.now(timezone.utc)
+    ranked = sorted(pool, key=lambda row: note_score(row, now), reverse=True)
+    return ranked[:MAX_ATTACHED_NOTES]
+
+
+async def _query_note_rows(
+    client: CCClient, ccid: str, subjects: list[str]
+) -> list[dict[str, Any]]:
+    """Fetch current note-bearing rows for exact subjects (best-effort)."""
     try:
         envelope = await client.execute(
-            _NOTES_QUERY, client_context_id=ccid, statement_parameters={"subjects": wanted}
+            _NOTES_QUERY, client_context_id=ccid, statement_parameters={"subjects": subjects}
         )
     except GatewayError:
         return []
-    rows = [
+    return [
         row for row in envelope.get("results", []) if isinstance(row, dict) and _note_text(row)
     ]
-    now = datetime.now(timezone.utc)
-    ranked = sorted(rows, key=lambda row: note_score(row, now), reverse=True)
-    return ranked[:MAX_ATTACHED_NOTES]
+
+
+def _link_subjects(rows: list[dict[str, Any]], seen: set[str]) -> list[str]:
+    """Valid, unseen link targets from a row set, capped for the one-hop follow."""
+    out: list[str] = []
+    for row in rows:
+        for link in row.get("links") or []:
+            target = str(link)
+            if target in seen or target in out or not _IDENTIFIER_RE.match(target):
+                continue
+            out.append(target)
+            if len(out) == MAX_NOTE_SUBJECTS:
+                return out
+    return out
+
+
+def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop rows sharing an id, keeping first occurrence (direct hit wins)."""
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        key = str(row.get("id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
 
 
 def display_notes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

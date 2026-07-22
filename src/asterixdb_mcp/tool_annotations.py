@@ -105,6 +105,17 @@ TOOL_ANNOTATIONS["memory_write"] = ToolAnnotations(
     openWorldHint=True,
 )
 
+# remember_preference persists a query-writing rule into AgentMemory.Memory,
+# same gated write surface as memory_write. Re-recording an identical rule is a
+# no-op, so it is non-destructive and idempotent.
+TOOL_ANNOTATIONS["remember_preference"] = ToolAnnotations(
+    title="Remember Query Preference",
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+
 # get_reference reads static documentation bundled in the gateway; it never
 # reaches the cluster, so it is a closed-world read.
 TOOL_ANNOTATIONS["get_reference"] = ToolAnnotations(

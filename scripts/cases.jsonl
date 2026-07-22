@@ -1,0 +1,10 @@
+{"axis": "recall", "query": "yelp business categories stars and attributes", "expect_subjects": ["Yelp.Business"]}
+{"axis": "recall", "query": "yelp user profile and check-in activity", "expect_subjects": ["Yelp.Checkin", "Yelp.User"]}
+{"axis": "recall", "subject": "Yelp.Review", "query": "yelp review stars text useful votes", "expect_subjects": ["Yelp.Review"]}
+{"axis": "recall", "query": "real estate flood zones risk", "expect_subjects": ["real_estate.flood_zones"]}
+{"axis": "recall", "query": "real estate hospitals and places of interest", "expect_subjects": ["real_estate.hospitals", "real_estate.places"]}
+{"axis": "recall", "query": "real estate storm events and elevation terrain", "expect_subjects": ["real_estate.storm_events", "real_estate.elevation"]}
+{"axis": "recall", "query": "borg cluster machine events", "expect_subjects": ["borg.machine_events"]}
+{"axis": "recall", "query": "borg instance usage and rightsizing recommendations", "expect_subjects": ["borg.instance_usage", "borg.rightsizing_recs"]}
+{"axis": "reuse", "query": "count keys per yelp business object fields", "expect_snippet": "object_keys"}
+{"axis": "forgetting", "query": "borg machine events cluster", "forbid_subjects": ["Yelp.Tip"]}

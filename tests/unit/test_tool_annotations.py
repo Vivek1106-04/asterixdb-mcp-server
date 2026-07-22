@@ -23,6 +23,7 @@ EXPECTED_TOOLS = {
     "get_function",
     "memory_search",
     "memory_write",
+    "remember_preference",
     "search_metadata",
     "get_cluster_status",
     "get_node_details",
@@ -45,11 +46,11 @@ def test_no_tool_is_marked_destructive() -> None:
 
 
 def test_only_sanctioned_tools_are_not_read_only() -> None:
-    # cancel_query mutates execution state; memory_write persists notes into the
-    # AgentMemory.Memory store (settings-gated, scoped in the CC client). Every
-    # other tool stays readonly=true end to end.
+    # cancel_query mutates execution state; memory_write and remember_preference
+    # persist into the AgentMemory.Memory store (settings-gated, scoped in the CC
+    # client). Every other tool stays readonly=true end to end.
     not_read_only = {n for n, a in TOOL_ANNOTATIONS.items() if a.readOnlyHint is not True}
-    assert not_read_only == {"cancel_query", "memory_write"}
+    assert not_read_only == {"cancel_query", "memory_write", "remember_preference"}
 
 
 def test_only_in_gateway_reads_are_closed_world() -> None:
