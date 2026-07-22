@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**27 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
+**29 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -29,7 +29,8 @@ prompts are guided multi-step workflows.
 Every tool advertises MCP behavioral annotations (`readOnlyHint`,
 `destructiveHint`, `idempotentHint`, `openWorldHint`) so a client can tell a
 safe read from a state-changing call without parsing the description — the whole
-surface is read-only except `cancel_query`, and nothing is destructive. Prompt
+surface is read-only except `cancel_query`, `memory_write`, and
+`remember_preference`, and nothing is destructive. Prompt
 and resource-template arguments support live `completion/complete`: typing a
 `dataverse`, `dataset`, or grouping/metric field completes from the cluster's
 real metadata, scoped by any argument already chosen.
@@ -65,6 +66,7 @@ a failed call to be rejected.
 | Discover | `get_dataset_statistics` | Sampled row-count/size estimate and ANALYZE freshness for a dataset. |
 | Memory | `memory_search` | OKF concept docs (schema, stats, proven queries) by subject key, full text, and link hop. |
 | Memory | `memory_write` | Persist one agent-curated note bi-temporally (opt-in: `ASTERIXDB_MCP_MEMORY_WRITE_ENABLED`; scoped to the memory store). |
+| Memory | `remember_preference` | Record a durable query-writing rule or stylistic preference (global or per-dataverse); preferences never decay and surface in the session briefing. |
 | Functions | `list_functions` | Built-in / user-defined functions, filtered by language. |
 | Functions | `get_function` | One function's signature, with near-name hints on a miss. |
 | Cluster | `get_cluster_status` | Live cluster state and node roster. |
@@ -98,7 +100,22 @@ Recall is ranked and self-reinforcing: when a query touches datasets with many
 notes, only the strongest attach (grounded knowledge and notes that keep
 proving useful outrank unread assertions), and every delivery bumps the
 delivered rows' usage counters — which feed both the ranking and the decay
-pass, so useful notes stay and dead weight ages out.
+pass, so useful notes stay and dead weight ages out. Ambient recall also
+follows each hit's concept links one hop — a dataset's note pulls in learned
+notes on its indexes and datatype — with the combined pool still capped and
+ranked, so related context arrives without extra tool calls.
+
+The first discovery call of a session (`list_dataverses`, `list_datasets`, or
+`get_schema`) carries a one-time **session briefing**: the dataverse/dataset
+inventory (with COLUMNAR counts), any active preferences, and the
+how-to-query-here rules — so the model is oriented before its first query.
+It is shown once per session, never attached to `execute_query` (whose text
+mirrors its structured result), and degrades silently if the catalog or store
+is unreachable. `remember_preference` feeds it: a recorded rule ("project
+columns instead of SELECT *", "prefer dataverse X") is stored apart from
+data-facts — never decayed, never evidence-scored, scoped `global` or
+per-dataverse, and deduplicated on rewrite. Preference writes ride the same
+`ASTERIXDB_MCP_MEMORY_WRITE_ENABLED` gate as `memory_write`.
 
 `memory_write` is the one agent-facing write surface: it persists a curated
 note bi-temporally — new subjects become standalone note concepts, notes on
@@ -328,8 +345,8 @@ connected to the database. To make the shared store win, add one rule to the
 client's custom-instructions / rules surface:
 
 > For anything about this database, use the asterixdb MCP tools — including
-> remembering: store facts with memory_write, never with your own memory
-> feature or notes files.
+> remembering: store facts with memory_write and query-writing rules with
+> remember_preference, never with your own memory feature or notes files.
 
 The deterministic paths (learned notes attached to schemas, samples, first
 queries, and failures; automatic error→fix capture) work without this rule; the
@@ -373,6 +390,7 @@ scripts/
   okf_bundle.py      # export/import the store as an OKF bundle (index.md, log.md, concepts)
   okf_consolidate.py # sleep-time pass: dedup, trust decay, forgetting (supersede below floor)
   memory_eval.py     # eval harness: recall, forgetting, efficiency, reuse metrics from JSONL cases
+  cases.jsonl        # starter evaluation corpus for memory_eval.py
   memory_distill.py  # distillation of session events (cluster + JSONL): proven queries + recurring failures
   memory_migrate_labels.py # one-time: label pre-evidence overlay notes as (unverified)
 tests/
