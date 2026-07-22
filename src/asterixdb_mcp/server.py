@@ -67,6 +67,7 @@ from .tools.async_query import (
     run_submit_async_query,
     run_wait_on_async_query,
 )
+from .tools.briefing import BriefingState, maybe_attach_briefing
 from .tools.check_index_usage import run_check_index_usage
 from .tools.dataset_stats import run_get_dataset_statistics
 from .tools.describe_dataverse import run_describe_dataverse
@@ -85,6 +86,7 @@ from .tools.memory_notes import RecallState
 from .tools.memory_search import run_memory_search
 from .tools.memory_write import run_memory_write
 from .tools.physical_plan import run_explain_physical_plan
+from .tools.preferences import run_remember_preference
 from .tools.profile_query import run_profile_query
 from .tools.query_history import record_query, run_get_query_history
 from .tools.recommend_indexes import run_recommend_indexes
@@ -298,6 +300,20 @@ MEMORY_WRITE_DESCRIPTION = (
     "memory writes enabled; every other statement this gateway issues stays read-only."
 )
 
+REMEMBER_PREFERENCE_DESCRIPTION = (
+    "Record a durable query-writing rule or stylistic preference for this cluster so it "
+    "steers query generation in every future session.\n\n"
+    "Use this — not memory_write — for guidance on HOW to write queries rather than facts "
+    "about the data: 'always project columns instead of SELECT *', 'quote reserved words in "
+    "backticks', 'prefer the CA dataverse for address lookups'. When the user states a "
+    "standing preference for how you should query, record it HERE.\n\n"
+    "`scope` is 'global' (applies to every query) or a dataverse name (applies only to that "
+    "dataverse). Preferences surface in the once-per-session start briefing, never decay, and "
+    "are not evidence-scored. Recording the same rule twice is a no-op.\n\n"
+    "Requires the gateway to run with memory writes enabled; every other statement stays "
+    "read-only."
+)
+
 SERVER_INSTRUCTIONS = (
     "This server gives you read access to an AsterixDB cluster plus a persistent, shared "
     "memory store about its data.\n\n"
@@ -315,7 +331,10 @@ SERVER_INSTRUCTIONS = (
     "immediately with memory_write(replaces=<fragment of the wrong note>) and ground the "
     "correction with the query that proved it. Never leave a note you know is wrong.\n"
     "4. Ground queries in inspected schema, never guesses: list_dataverses / list_datasets "
-    "/ get_schema before first use of a dataset in a session if memory had no answer."
+    "/ get_schema before first use of a dataset in a session if memory had no answer.\n"
+    "5. RECORD PREFERENCES: when the user states a standing rule for HOW you should write "
+    "queries (project columns, quote reserved words, prefer a dataverse), call "
+    "remember_preference so it primes every future session's start briefing."
 )
 
 SEARCH_METADATA_DESCRIPTION = (
@@ -550,6 +569,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     audit = AuditLog(settings.audit_log_ttl_s)
     capture = CaptureState()
     recall = RecallState()
+    briefing = BriefingState()
     pools = PermitPools.from_settings(settings)
 
     # Host/port/path are read by the Streamable HTTP transport (transport='http');
@@ -660,6 +680,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         dataset: Annotated[str, Field(description="Dataset to describe.")],
     ) -> types.CallToolResult:
         result = await run_get_schema(_client(), settings, dataverse=dataverse, dataset=dataset)
+        result = await maybe_attach_briefing(_client(), settings, briefing, result)
         return _to_call_tool_result(result)
 
     @mcp.tool(
@@ -669,6 +690,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     )
     async def list_dataverses() -> types.CallToolResult:
         result = await run_list_dataverses(_client(), settings)
+        result = await maybe_attach_briefing(_client(), settings, briefing, result)
         return _to_call_tool_result(result)
 
     @mcp.tool(
@@ -684,6 +706,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         result = await run_list_datasets(
             _client(), settings, dataverse=dataverse, offset=offset, limit=limit
         )
+        result = await maybe_attach_briefing(_client(), settings, briefing, result)
         return _to_call_tool_result(result)
 
     @mcp.tool(
@@ -1021,6 +1044,30 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             tags=tags,
             source_query=source_query,
             replaces=replaces,
+            author=_client_identity(mcp),
+        )
+        return _to_call_tool_result(result)
+
+    @mcp.tool(
+        name="remember_preference",
+        description=REMEMBER_PREFERENCE_DESCRIPTION,
+        annotations=TOOL_ANNOTATIONS["remember_preference"],
+    )
+    async def remember_preference(
+        text: Annotated[
+            str,
+            Field(description="The query-writing rule to keep (max 500 chars). One rule."),
+        ],
+        scope: Annotated[
+            str,
+            Field(description="'global' (every query) or a dataverse name."),
+        ] = "global",
+    ) -> types.CallToolResult:
+        result = await run_remember_preference(
+            _client(),
+            settings,
+            text=text,
+            scope=scope,
             author=_client_identity(mcp),
         )
         return _to_call_tool_result(result)

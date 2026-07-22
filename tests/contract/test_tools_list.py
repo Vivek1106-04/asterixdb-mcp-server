@@ -65,6 +65,7 @@ async def test_advertises_exactly_the_expected_tools(server) -> None:
         "get_function",
         "memory_search",
         "memory_write",
+        "remember_preference",
         "search_metadata",
         "get_cluster_status",
         "get_node_details",
@@ -91,10 +92,11 @@ async def test_every_tool_advertises_behavioral_annotations(server) -> None:
 
 async def test_read_only_tools_are_marked_read_only(server) -> None:
     tools = {t.name: t for t in await server.list_tools()}
-    # cancel_query mutates execution state; memory_write persists notes into the
-    # settings-gated AgentMemory.Memory store. Everything else is read-only.
+    # cancel_query mutates execution state; memory_write and remember_preference
+    # persist into the settings-gated AgentMemory.Memory store. Everything else is
+    # read-only.
     for name, tool in tools.items():
-        expected = name not in ("cancel_query", "memory_write")
+        expected = name not in ("cancel_query", "memory_write", "remember_preference")
         assert tool.annotations.readOnlyHint is expected, name
 
 

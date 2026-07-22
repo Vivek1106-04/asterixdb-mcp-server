@@ -321,6 +321,79 @@ async def test_fetch_note_rows_caps_and_ranks(settings: Settings) -> None:
     assert got[0]["recall_count"] == MAX_ATTACHED_NOTES + 2
 
 
+# one-hop link expansion
+
+
+def test_link_subjects_filters_seen_invalid_and_dedupes() -> None:
+    from asterixdb_mcp.tools.memory_notes import _link_subjects
+
+    rows = [
+        {"links": ["A.b", "C.d", "A.b"]},  # A.b is seen; dup C.d collapses
+        {"links": ["E.f", "bad subject!"]},  # invalid identifier rejected
+        {"links": None},  # missing links tolerated
+    ]
+    assert _link_subjects(rows, seen={"A.b"}) == ["C.d", "E.f"]
+
+
+def test_link_subjects_caps_the_follow() -> None:
+    from asterixdb_mcp.tools.memory_notes import MAX_NOTE_SUBJECTS, _link_subjects
+
+    rows = [{"links": [f"D.s{i}" for i in range(MAX_NOTE_SUBJECTS + 3)]}]
+    assert len(_link_subjects(rows, seen=set())) == MAX_NOTE_SUBJECTS
+
+
+def test_dedupe_rows_keeps_first_by_id() -> None:
+    from asterixdb_mcp.tools.memory_notes import _dedupe_rows
+
+    rows = [{"id": "1", "n": "a"}, {"id": "2", "n": "b"}, {"id": "1", "n": "dup"}]
+    assert _dedupe_rows(rows) == [{"id": "1", "n": "a"}, {"id": "2", "n": "b"}]
+
+
+async def test_fetch_note_rows_follows_links_one_hop(settings: Settings) -> None:
+    from asterixdb_mcp.tools.memory_notes import fetch_note_rows
+
+    direct = [
+        {
+            "id": "D.s@t",
+            "subject": "D.s",
+            "type": "Note",
+            "text": "main note",
+            "links": ["D.s/index/city_idx"],
+        }
+    ]
+    linked = [
+        {
+            "id": "D.s/index/city_idx@t",
+            "subject": "D.s/index/city_idx",
+            "type": "AsterixDB Index",
+            "text": "core",
+            "overlay": "use this index for city lookups",
+        }
+    ]
+    responses = iter([direct, linked])
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": next(responses)})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    got = await fetch_note_rows(cap.client, "ccid", ["D.s"])
+
+    subjects = {row["subject"] for row in got}
+    assert subjects == {"D.s", "D.s/index/city_idx"}
+    # The second query fetched exactly the linked subject.
+    assert parse_qs(cap.requests[1].content.decode())["$subjects"][0] == '["D.s/index/city_idx"]'
+
+
+async def test_fetch_note_rows_no_links_issues_single_query(settings: Settings) -> None:
+    from asterixdb_mcp.tools.memory_notes import fetch_note_rows
+
+    rows = [{"id": "D.s@t", "subject": "D.s", "type": "Note", "text": "no links here"}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    got = await fetch_note_rows(cap.client, "ccid", ["D.s"])
+    assert len(got) == 1
+    assert len(cap.requests) == 1  # no second hop when nothing links out
+
+
 # reinforcement on delivery
 
 

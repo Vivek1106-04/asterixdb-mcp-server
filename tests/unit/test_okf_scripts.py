@@ -11,8 +11,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import okf_bundle  # noqa: E402
 import memory_eval  # noqa: E402
+import okf_bundle  # noqa: E402
 import okf_consolidate  # noqa: E402
 import okf_refresh  # noqa: E402
 
