@@ -43,6 +43,7 @@ from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
 from . import ToolResult
+from .memory_notes import reinforce_notes
 from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
 
 MAX_TEXT_LEN = 4000
@@ -164,12 +165,24 @@ async def run_memory_write(
         # Near-duplicate paraphrases are rejected before any write: agents that
         # just read a fact in an ambient note tend to re-record it in their own
         # words, bloating the store. Exact repeats fall through to _reconcile's
-        # "unchanged"/"regrounded" handling; corrections (replaces) and evidence
-        # upgrades (source_query) always land.
-        if replaces is None and source_query is None and note not in stored_text:
+        # "unchanged"/"regrounded" handling; corrections (replaces) always land,
+        # and evidence lands when it upgrades an UNVERIFIED stored block — a
+        # second proof of an already-grounded block adds nothing, so it is
+        # rejected too, but counted: the rejection reinforces the existing row's
+        # usage so the decay pass sees a repeatedly-confirmed fact as alive.
+        if replaces is None and note not in stored_text:
+            # A duplicate implies stored text, so `existing` is a row here.
             duplicate = near_duplicate_block(note, stored_text)
-            if duplicate is not None:
-                return _duplicate_result(subject, duplicate, original_subject)
+            if duplicate is not None and (
+                source_query is None or _block_grounded(duplicate, existing or {})
+            ):
+                await reinforce_notes(client, ccid, [existing or {}])
+                return _duplicate_result(
+                    subject,
+                    duplicate,
+                    original_subject,
+                    grounded=_block_grounded(duplicate, existing or {}),
+                )
 
         action, row, retired = _reconcile(
             existing, subject, note, now, links, tags, source_query, replaces
@@ -286,23 +299,46 @@ async def _canonicalize_subject(client: CCClient, ccid: str, subject: str) -> st
     return subject
 
 
+def _block_grounded(block: str, existing: dict[str, Any]) -> bool:
+    """Whether the matched stored block already carries query evidence.
+
+    Overlay blocks mark unevidenced claims inline with '(unverified)'; a block
+    without the marker is grounded. Standalone notes ground the whole row via
+    its source_query field.
+    """
+    if _is_walk_owned(existing):
+        return "(unverified)" not in block
+    return bool(existing.get("source_query"))
+
+
 def _canonicalized_field(subject: str, original: str) -> dict[str, str]:
     """The structured-payload field recording a canonicalized subject, if any."""
     return {} if subject == original else {"canonicalizedFrom": original}
 
 
-def _duplicate_result(subject: str, duplicate: str, original_subject: str) -> ToolResult:
+def _duplicate_result(
+    subject: str, duplicate: str, original_subject: str, grounded: bool = False
+) -> ToolResult:
     preview = (
         duplicate if len(duplicate) <= DUP_PREVIEW_LEN else duplicate[:DUP_PREVIEW_LEN] + "…"
     )
-    return ToolResult(
-        text=(
-            f"Memory for '{subject}' already covers this — stored note: \"{preview}\". "
+    if grounded:
+        guidance = (
+            "The stored note is already grounded; your confirmation reinforced it — "
+            "nothing further to do. If your note adds a genuinely new fact, rephrase "
+            "it to state only the new part; if it corrects the stored note, rewrite "
+            "with replaces=<fragment of the stored note>."
+        )
+    else:
+        guidance = (
             "Nothing written. If your note adds a genuinely new fact, rephrase it to "
             "state only the new part; if it corrects the stored note, rewrite with "
             "replaces=<fragment of the stored note>; if a query proved it, include "
             "source_query to ground the stored claim."
-        ),
+        )
+    return ToolResult(
+        text=f"Memory for '{subject}' already covers this — stored note: \"{preview}\". "
+        + guidance,
         structured={
             "status": "success",
             "subject": subject,
@@ -310,6 +346,7 @@ def _duplicate_result(subject: str, duplicate: str, original_subject: str) -> To
             "id": None,
             "retired": 0,
             "duplicateOf": preview,
+            "duplicateGrounded": grounded,
             **_canonicalized_field(subject, original_subject),
         },
     )
