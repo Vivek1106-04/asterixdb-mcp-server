@@ -609,7 +609,8 @@ async def test_paraphrase_of_existing_note_is_rejected(write_settings: Settings)
     assert result.structured["id"] is None
     assert "already covers this" in result.text
     assert "DAMAGE_PROPERTY" in result.structured["duplicateOf"]
-    assert len(cap.requests) == 1  # the current-row lookup only; nothing written
+    # current-row lookup + reinforce bump; no new row inserted
+    assert len(cap.requests) == 2
 
 
 async def test_paraphrase_with_new_number_is_not_a_duplicate(write_settings: Settings) -> None:
@@ -682,7 +683,8 @@ async def test_paraphrase_of_overlay_block_is_rejected(write_settings: Settings)
     )
 
     assert result.structured["action"] == "duplicate"
-    assert len(cap.requests) == 1
+    # current-row lookup + reinforce bump; no new row inserted
+    assert len(cap.requests) == 2
 
 
 async def test_long_duplicate_preview_is_truncated(write_settings: Settings) -> None:
@@ -810,3 +812,123 @@ async def test_canonicalized_subject_hits_near_duplicate_check(
     )
     assert result.structured["action"] == "duplicate"
     assert result.structured["canonicalizedFrom"] == "flood_zones"
+
+
+# --- grounded-duplicate rejection (evidence bypass closed) ---
+
+
+async def test_grounded_note_paraphrase_with_evidence_is_rejected_and_reinforced(
+    write_settings: Settings,
+) -> None:
+    existing = {
+        **_stored_note(
+            "DAMAGE_PROPERTY is a string with K/M suffix like 10.00K, parse before summing"
+        ),
+        "source_query": "SELECT DAMAGE_PROPERTY FROM dv.ds LIMIT 1;",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="Parse DAMAGE_PROPERTY before summing: string with K/M suffix like 10.00K",
+        source_query="SELECT DAMAGE_PROPERTY FROM dv.ds LIMIT 2;",
+    )
+
+    assert result.structured["action"] == "duplicate"
+    assert result.structured["duplicateGrounded"] is True
+    assert "reinforced" in result.text
+    # current-row lookup + the reinforce upsert; no insert of a new row
+    assert len(cap.requests) == 2
+
+
+async def test_unverified_note_paraphrase_with_evidence_still_lands(
+    write_settings: Settings,
+) -> None:
+    existing = _stored_note(
+        "DAMAGE_PROPERTY is a string with K/M suffix like 10.00K, parse before summing"
+    )  # no source_query -> unverified
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="Parse DAMAGE_PROPERTY before summing: string with K/M suffix like 10.00K",
+        source_query="SELECT DAMAGE_PROPERTY FROM dv.ds LIMIT 1;",
+    )
+
+    assert result.structured["action"] == "superseded"
+
+
+async def test_grounded_overlay_block_paraphrase_with_evidence_is_rejected(
+    write_settings: Settings,
+) -> None:
+    existing = {
+        "id": "dv.ds@t0",
+        "subject": "dv.ds",
+        "type": "AsterixDB Dataset",
+        "core": "core facts",
+        # no '(unverified)' marker -> this overlay block is grounded
+        "overlay": "county names carry a County suffix in hospitals data",
+        "text": "core facts\n\ncounty names carry a County suffix in hospitals data",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="in hospitals data county names carry a County suffix",
+        source_query="SELECT county FROM dv.ds LIMIT 1;",
+    )
+
+    assert result.structured["action"] == "duplicate"
+    assert result.structured["duplicateGrounded"] is True
+
+
+async def test_unverified_overlay_block_paraphrase_with_evidence_still_lands(
+    write_settings: Settings,
+) -> None:
+    existing = {
+        "id": "dv.ds@t0",
+        "subject": "dv.ds",
+        "type": "AsterixDB Dataset",
+        "core": "core facts",
+        "overlay": "(unverified) county names carry a County suffix in hospitals data",
+        "text": "core facts\n\n(unverified) county names carry a County suffix in hospitals data",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="in hospitals data county names carry a County suffix",
+        source_query="SELECT county FROM dv.ds LIMIT 1;",
+    )
+
+    assert result.structured["action"] == "annotated"
+
+
+async def test_ungrounded_duplicate_reports_duplicate_grounded_false(
+    write_settings: Settings,
+) -> None:
+    existing = _stored_note(
+        "DAMAGE_PROPERTY is a string with K/M suffix like 10.00K, parse before summing"
+    )
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="Parse DAMAGE_PROPERTY before summing: string with K/M suffix like 10.00K",
+    )
+
+    assert result.structured["action"] == "duplicate"
+    assert result.structured["duplicateGrounded"] is False
+    assert "source_query" in result.text  # ungrounded dup still invites grounding
