@@ -262,6 +262,11 @@ All settings come from environment variables (prefix `ASTERIXDB_MCP_`):
 | `ASTERIXDB_MCP_MAX_TIME_MS` | `30000` | Egress layer 1: per-query wall-clock ceiling. |
 | `ASTERIXDB_MCP_MAX_BYTES_PER_QUERY` | `10485760` | Egress layer 2: max response bytes buffered. |
 | `ASTERIXDB_MCP_REQUEST_TIMEOUT_S` | `35.0` | httpx transport timeout for the CC hop. |
+| `ASTERIXDB_MCP_MEMORY_ENABLED` | `true` | Master switch for the memory surface: `false` hides the memory tools and disables the briefing, ambient recall, capture, maintenance, and distill loop. Overrides the write flag. |
+| `ASTERIXDB_MCP_MEMORY_WRITE_ENABLED` | `false` | Allow writes to the `AgentMemory` store (`memory_write`, `remember_preference`, capture, maintenance). Every other statement stays read-only. |
+| `ASTERIXDB_MCP_SESSION_LOG_DIR` | _(unset)_ | Directory for per-session JSONL query-outcome logs (offline buffer / episodic record). Unset disables file logging. |
+| `ASTERIXDB_MCP_AUTO_MAINTENANCE_ENABLED` | `true` | Run the bounded startup maintenance pass (store bootstrap, catalog walk, decay, one distill). Acts only with memory writes enabled. |
+| `ASTERIXDB_MCP_DISTILL_INTERVAL_S` | `0` | HTTP transport only: auto-distill period in seconds; `0` disables the loop. Requires memory writes enabled. |
 
 ### HTTP transport (optional)
 
