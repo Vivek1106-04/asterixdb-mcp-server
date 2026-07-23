@@ -110,6 +110,8 @@ async def capture_query_outcome(
     metrics: dict[str, Any] | None = None,
 ) -> None:
     """Feed one query outcome through capture and persist any distilled notes."""
+    if not settings.memory_enabled:
+        return
     await _record_session_event(
         client, settings, statement, result_error, client_name=client_name, metrics=metrics
     )

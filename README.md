@@ -170,6 +170,18 @@ Concurrent gateway instances elect a single runner via an exclusive lock file
 (0600, stale-broken after 10 minutes), the whole pass is capped at 60 seconds,
 and every step degrades gracefully — a cluster without `okf_catalog()` simply
 skips the walk. Disable with `ASTERIXDB_MCP_AUTO_MAINTENANCE_ENABLED=false`.
+
+`ASTERIXDB_MCP_MEMORY_ENABLED=false` is the master switch for the whole memory
+surface: it hides the memory tools (`memory_search`, `memory_write`,
+`remember_preference`), skips the session briefing and ambient learned-note
+recall, and disables episodic capture, startup maintenance, and the distill
+loop — the gateway serves the plain catalog/query surface only. It overrides
+`ASTERIXDB_MCP_MEMORY_WRITE_ENABLED` when off.
+
+Writes are deduplicated beyond exact repeats: a note whose content tokens are
+almost all present in an existing note on the same subject is rejected as a
+near-duplicate paraphrase (the response quotes the stored note). Notes that
+carry a new figure, a `source_query`, or a `replaces` correction always land.
 End-user effect: install, point at a cluster, done — no scripts, no cron. `scripts/memory_migrate_labels.py` is a one-time
 migration that labels overlay notes written before evidence labels existed as
 `(unverified)`, so legacy claims stop reading as verified fact.

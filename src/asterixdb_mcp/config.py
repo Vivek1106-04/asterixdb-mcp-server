@@ -90,6 +90,15 @@ class Settings(BaseSettings):
     )
 
     # Agentic-memory store
+    memory_enabled: bool = Field(
+        default=True,
+        description="Master switch for the agentic-memory surface. When false the "
+        "memory tools (memory_search, memory_write, remember_preference) are not "
+        "registered, the session briefing and ambient learned-note recall are "
+        "skipped, and episodic capture, startup maintenance, and the distill loop "
+        "are disabled — the gateway serves the plain catalog/query surface only. "
+        "Overrides memory_write_enabled when off.",
+    )
     memory_write_enabled: bool = Field(
         default=False,
         description="Allow the memory_write tool to persist agent-curated notes into "

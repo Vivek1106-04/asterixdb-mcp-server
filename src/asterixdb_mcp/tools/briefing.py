@@ -112,10 +112,12 @@ async def maybe_attach_briefing(
 ) -> ToolResult:
     """Prepend the session briefing to ``result`` on the first call that can.
 
-    No-op once the briefing has been delivered, or when it renders empty. The
-    briefing leads the text so the model reads the cluster orientation before
-    the tool's own output.
+    No-op once the briefing has been delivered, when it renders empty, or when
+    the memory surface is disabled. The briefing leads the text so the model
+    reads the cluster orientation before the tool's own output.
     """
+    if not settings.memory_enabled:
+        return result
     if not state.pending():
         return result
     ccid = make_client_context_id(settings.agent_session_id, "briefing")

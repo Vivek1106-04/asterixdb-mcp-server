@@ -439,17 +439,20 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
 }
 
 
-def apply_output_schemas(mcp: FastMCP) -> None:
+def apply_output_schemas(mcp: FastMCP, exclude: tuple[str, ...] = ()) -> None:
     """Attach each advertised output schema to its registered tool.
 
     The schema is seeded into the ``Tool.output_schema`` cached value so it is
     reported in ``tools/list``, while ``fn_metadata.output_schema`` is left unset
     so the SDK never validates the gateway's structured content against it (which
     would reject the error envelope). Raises ``KeyError`` if a schema names a tool
-    that is not registered, catching drift in tests.
+    that is not registered, catching drift in tests. ``exclude`` names schemas to
+    skip for tools deliberately deregistered (the memory surface when disabled).
     """
     manager = mcp._tool_manager
     for name, schema in OUTPUT_SCHEMAS.items():
+        if name in exclude:
+            continue
         tool = manager.get_tool(name)
         if tool is None:
             raise KeyError(f"output schema names unknown tool: {name}")
