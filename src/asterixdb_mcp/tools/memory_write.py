@@ -41,6 +41,7 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
+from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
 from . import ToolResult
 from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
 
@@ -140,6 +141,12 @@ async def run_memory_write(
             )
 
     ccid = make_client_context_id(settings.agent_session_id, "memory_write")
+    # Agents often address a dataset by its bare name ('flood_zones'); the walk
+    # owns the qualified concept ('real_estate.flood_zones'). Writing under the
+    # bare name splits knowledge across two subjects, so ambient recall and the
+    # near-duplicate check both miss it — canonicalize first.
+    original_subject = subject
+    subject = await _canonicalize_subject(client, ccid, subject)
     try:
         envelope = await client.execute(
             _CURRENT_QUERY, client_context_id=ccid, statement_parameters={"subject": subject}
@@ -162,7 +169,7 @@ async def run_memory_write(
         if replaces is None and source_query is None and note not in stored_text:
             duplicate = near_duplicate_block(note, stored_text)
             if duplicate is not None:
-                return _duplicate_result(subject, duplicate)
+                return _duplicate_result(subject, duplicate, original_subject)
 
         action, row, retired = _reconcile(
             existing, subject, note, now, links, tags, source_query, replaces
@@ -178,6 +185,7 @@ async def run_memory_write(
                     "action": action,
                     "id": None,
                     "retired": 0,
+                    **_canonicalized_field(subject, original_subject),
                 },
             )
         if existing is not None:
@@ -199,6 +207,7 @@ async def run_memory_write(
         "id": row["id"],
         "retired": retired,
         "verified": bool(source_query),
+        **_canonicalized_field(subject, original_subject),
     }
     if conflicts:
         structured["conflicts"] = conflicts
@@ -254,7 +263,35 @@ def near_duplicate_block(note: str, existing_text: str) -> str | None:
     return None
 
 
-def _duplicate_result(subject: str, duplicate: str) -> ToolResult:
+async def _canonicalize_subject(client: CCClient, ccid: str, subject: str) -> str:
+    """Resolve a bare dataset name to its 'Dataverse.Dataset' concept identity.
+
+    Only bare names are touched (no '.' or '/'), and only on an exact,
+    unambiguous match against the catalog inventory; dataverse names, unknown
+    names, and ambiguous names (same dataset in two dataverses) pass through
+    unchanged. Best-effort: an unreachable catalog never blocks the write.
+    """
+    if "." in subject or "/" in subject:
+        return subject
+    try:
+        rows = await fetch_dataset_rows(client, ccid=ccid)
+    except GatewayError:
+        return subject
+    dataverses = dataverse_names(rows)
+    if subject in dataverses:
+        return subject
+    owners = [dv for dv in dataverses if subject in dataset_names(rows, dv)]
+    if len(owners) == 1:
+        return f"{owners[0]}.{subject}"
+    return subject
+
+
+def _canonicalized_field(subject: str, original: str) -> dict[str, str]:
+    """The structured-payload field recording a canonicalized subject, if any."""
+    return {} if subject == original else {"canonicalizedFrom": original}
+
+
+def _duplicate_result(subject: str, duplicate: str, original_subject: str) -> ToolResult:
     preview = (
         duplicate if len(duplicate) <= DUP_PREVIEW_LEN else duplicate[:DUP_PREVIEW_LEN] + "…"
     )
@@ -273,6 +310,7 @@ def _duplicate_result(subject: str, duplicate: str) -> ToolResult:
             "id": None,
             "retired": 0,
             "duplicateOf": preview,
+            **_canonicalized_field(subject, original_subject),
         },
     )
 
