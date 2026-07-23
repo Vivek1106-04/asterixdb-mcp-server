@@ -245,8 +245,11 @@ async def attach_statement_notes(
     not yet covered this session; either way the subjects actually delivered
     are recorded so later attachments do not repeat them. When ``settings``
     allows memory writes, delivery also reinforces the delivered rows' usage
-    counters, feeding the recall-utility score and the decay pass.
+    counters, feeding the recall-utility score and the decay pass. With the
+    memory surface disabled the result passes through untouched.
     """
+    if settings is not None and not settings.memory_enabled:
+        return result
     subjects = subjects_from_statement(statement)
     if recall is not None and first_use_only:
         subjects = recall.fresh(subjects)

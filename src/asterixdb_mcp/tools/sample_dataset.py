@@ -74,6 +74,8 @@ async def run_sample_dataset(
         "egress": egress,
     }
     text = f"Sampled {len(window)} row(s) from {dv}.{ds}."
+    if not settings.memory_enabled:
+        return ToolResult(text=text, structured=structured)
     # Sampling is where a model discovers value-domain gotchas: ride the learned
     # notes along, or prompt for the first write when none exist yet.
     notes = await fetch_memory_notes(client, ccid, [f"{dv}.{ds}", dv])

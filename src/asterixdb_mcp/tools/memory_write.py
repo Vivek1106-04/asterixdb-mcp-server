@@ -57,6 +57,11 @@ MAX_REPORTED_CONFLICTS = 3
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z_]{2,}")
 _CONFLICT_CONTEXT_CHARS = 30
+# Near-duplicate rejection: a paraphrase whose content tokens are almost all
+# already present in one stored block adds noise, not knowledge. Containment
+# (not Jaccard) so a short restatement of a long stored note still matches.
+NEAR_DUP_THRESHOLD = 0.8
+DUP_PREVIEW_LEN = 160
 # Structural words carry no claim; excluding them keeps the label-match honest.
 _CONFLICT_STOPWORDS = frozenset(
     {"the", "and", "for", "with", "not", "are", "was", "this",
@@ -146,9 +151,18 @@ async def run_memory_write(
         # Compare against the stored note BEFORE it is superseded; a correction
         # via `replaces` already retires the stale line, so only flag when the
         # writer did not signal one.
-        conflicts = (
-            [] if replaces else numeric_conflicts(note, _existing_note_text(existing))
-        )
+        stored_text = _existing_note_text(existing)
+        conflicts = [] if replaces else numeric_conflicts(note, stored_text)
+
+        # Near-duplicate paraphrases are rejected before any write: agents that
+        # just read a fact in an ambient note tend to re-record it in their own
+        # words, bloating the store. Exact repeats fall through to _reconcile's
+        # "unchanged"/"regrounded" handling; corrections (replaces) and evidence
+        # upgrades (source_query) always land.
+        if replaces is None and source_query is None and note not in stored_text:
+            duplicate = near_duplicate_block(note, stored_text)
+            if duplicate is not None:
+                return _duplicate_result(subject, duplicate)
 
         action, row, retired = _reconcile(
             existing, subject, note, now, links, tags, source_query, replaces
@@ -202,6 +216,65 @@ def _existing_note_text(existing: dict[str, Any] | None) -> str:
         return ""
     source = existing.get("overlay") if _is_walk_owned(existing) else existing.get("text")
     return str(source or "")
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Claim-bearing tokens: content words plus value-normalized numbers.
+
+    Numbers are included so a paraphrase carrying DIFFERENT figures is new
+    information, never a near-duplicate of the stored note.
+    """
+    words = {w.lower() for w in _WORD_RE.findall(text)} - _CONFLICT_STOPWORDS
+    numbers = {_normalize_number(n) for n in _NUMBER_RE.findall(text)}
+    return words | numbers
+
+
+def near_duplicate_block(note: str, existing_text: str) -> str | None:
+    """The stored block the note paraphrases, or None when it adds new content.
+
+    A block is a near-duplicate when at least ``NEAR_DUP_THRESHOLD`` of the new
+    note's content tokens already appear in it. Numbers are decisive: a note
+    carrying ANY figure the block lacks is new information, never a duplicate,
+    no matter how much wording it shares. Empty token sets never match — there
+    is no claim to compare.
+    """
+    new_tokens = _content_tokens(note)
+    if not new_tokens:
+        return None
+    new_numbers = {_normalize_number(n) for n in _NUMBER_RE.findall(note)}
+    for block in (b.strip() for b in existing_text.split("\n\n")):
+        if not block:
+            continue
+        block_tokens = _content_tokens(block)
+        if new_numbers - block_tokens:
+            continue
+        contained = len(new_tokens & block_tokens) / len(new_tokens)
+        if contained >= NEAR_DUP_THRESHOLD:
+            return block
+    return None
+
+
+def _duplicate_result(subject: str, duplicate: str) -> ToolResult:
+    preview = (
+        duplicate if len(duplicate) <= DUP_PREVIEW_LEN else duplicate[:DUP_PREVIEW_LEN] + "…"
+    )
+    return ToolResult(
+        text=(
+            f"Memory for '{subject}' already covers this — stored note: \"{preview}\". "
+            "Nothing written. If your note adds a genuinely new fact, rephrase it to "
+            "state only the new part; if it corrects the stored note, rewrite with "
+            "replaces=<fragment of the stored note>; if a query proved it, include "
+            "source_query to ground the stored claim."
+        ),
+        structured={
+            "status": "success",
+            "subject": subject,
+            "action": "duplicate",
+            "id": None,
+            "retired": 0,
+            "duplicateOf": preview,
+        },
+    )
 
 
 def _numeric_claims(text: str) -> dict[str, set[str]]:

@@ -92,7 +92,11 @@ def release_lock(path: Path) -> None:
 
 async def run_startup_maintenance(settings: Settings) -> None:
     """One bounded, locked, best-effort maintenance pass. Never raises."""
-    if not (settings.memory_write_enabled and settings.auto_maintenance_enabled):
+    if not (
+        settings.memory_enabled
+        and settings.memory_write_enabled
+        and settings.auto_maintenance_enabled
+    ):
         return
     lock = _lock_path(settings)
     if not acquire_lock(lock):

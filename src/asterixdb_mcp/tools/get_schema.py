@@ -77,6 +77,8 @@ async def run_get_schema(
         "datasetFormatInfo": extract_dataset_format_info(dataset_record),
     }
     text = _summarize(structured)
+    if not settings.memory_enabled:
+        return ToolResult(text=text, structured=structured)
     notes = await fetch_memory_notes(client, ccid, [f"{dataverse}.{dataset}", dataverse])
     if notes:
         structured["learnedNotes"] = notes

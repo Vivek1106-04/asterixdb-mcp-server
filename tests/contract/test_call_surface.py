@@ -800,10 +800,9 @@ async def test_memory_write_disabled_by_default() -> None:
 async def test_memory_write_enabled_creates_and_validates_schema() -> None:
     import jsonschema
 
-    def handler(req: httpx.Request) -> httpx.Response:
-        stmt = parse_qs(req.content.decode()).get("statement", [""])[0]
-        results = [] if stmt.lstrip().startswith("SELECT") else []
-        return httpx.Response(200, json={"status": "success", "results": results})
+    def handler(_req: httpx.Request) -> httpx.Response:
+        # Empty results for both the current-row lookup and the insert ack.
+        return httpx.Response(200, json={"status": "success", "results": []})
 
     server = _server_with_mock(handler, memory_write_enabled=True)
     result = await server.call_tool("memory_write", {"subject": "dv.ds", "text": "note"})
@@ -813,3 +812,14 @@ async def test_memory_write_enabled_creates_and_validates_schema() -> None:
     jsonschema.validate(result.structuredContent, tools["memory_write"].outputSchema)
     annotations = tools["memory_write"].annotations
     assert annotations.readOnlyHint is False and annotations.destructiveHint is False
+
+
+async def test_remember_preference_records_rule_via_call_surface() -> None:
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    server = _server_with_mock(handler, memory_write_enabled=True)
+    result = await server.call_tool(
+        "remember_preference", {"text": "always project columns instead of SELECT *"}
+    )
+    assert not result.isError

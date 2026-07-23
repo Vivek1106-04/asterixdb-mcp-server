@@ -187,7 +187,8 @@ def build_http_app(mcp: FastMCP, settings: Settings) -> Starlette:
         )
     )
 
-    if settings.distill_interval_s > 0 and settings.memory_write_enabled:
+    distill_on = settings.memory_enabled and settings.memory_write_enabled
+    if settings.distill_interval_s > 0 and distill_on:
         _install_auto_distill(app, settings)
 
     if settings.auth_mode == "bearer":

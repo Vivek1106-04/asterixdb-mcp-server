@@ -291,7 +291,9 @@ MEMORY_WRITE_DESCRIPTION = (
     "(the concept identity, e.g. 'MyDataverse.MyDataset'): notes on a catalog concept are "
     "appended to its learned overlay and survive catalog refreshes; other subjects become "
     "standalone note concepts. Reconciliation is bi-temporal — nothing is deleted, changed "
-    "facts are superseded. Duplicate notes are a no-op.\n\n"
+    "facts are superseded. Duplicate notes are a no-op, and near-duplicate paraphrases are "
+    "rejected: if a learned note attached to an earlier tool response already states the "
+    "fact, do NOT re-write it — write only genuinely new facts.\n\n"
     "CORRECTING A WRONG NOTE: overlay notes are append-only, so writing a correction alone "
     "leaves the outdated note standing next to it. Pass `replaces` with a distinctive "
     "fragment of the outdated note; matching lines are retired (they remain in history) "
@@ -312,6 +314,17 @@ REMEMBER_PREFERENCE_DESCRIPTION = (
     "are not evidence-scored. Recording the same rule twice is a no-op.\n\n"
     "Requires the gateway to run with memory writes enabled; every other statement stays "
     "read-only."
+)
+
+# The tools that exist only for the agentic-memory surface; with
+# settings.memory_enabled=False they are deregistered after build so the
+# gateway serves the plain catalog/query surface only.
+MEMORY_TOOL_NAMES = ("memory_search", "memory_write", "remember_preference")
+
+SERVER_INSTRUCTIONS_NO_MEMORY = (
+    "This server gives you read access to an AsterixDB cluster.\n\n"
+    "Ground queries in inspected schema, never guesses: list_dataverses / "
+    "list_datasets / get_schema before first use of a dataset in a session."
 )
 
 SERVER_INSTRUCTIONS = (
@@ -587,7 +600,10 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         if auth is not None:
             mcp_kwargs["auth"] = auth
             mcp_kwargs["token_verifier"] = token_verifier
-    mcp = FastMCP("asterixdb-mcp-server", instructions=SERVER_INSTRUCTIONS, **mcp_kwargs)
+    instructions = (
+        SERVER_INSTRUCTIONS if settings.memory_enabled else SERVER_INSTRUCTIONS_NO_MEMORY
+    )
+    mcp = FastMCP("asterixdb-mcp-server", instructions=instructions, **mcp_kwargs)
 
     def _client() -> CCClient:
         return holder.get()
@@ -1433,8 +1449,14 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             context_arguments=context_arguments,
         )
 
+    if not settings.memory_enabled:
+        # Deregister the memory-only tools: the surface behaves as if the
+        # memory layer did not exist (same reach-in as apply_output_schemas).
+        for name in MEMORY_TOOL_NAMES:
+            mcp._tool_manager._tools.pop(name, None)
+
     # Advertise each tool's successful-result shape (decoupled from validation).
-    apply_output_schemas(mcp)
+    apply_output_schemas(mcp, exclude=() if settings.memory_enabled else MEMORY_TOOL_NAMES)
 
     return mcp
 

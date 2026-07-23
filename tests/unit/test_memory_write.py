@@ -576,3 +576,147 @@ async def test_no_conflict_field_when_values_agree(write_settings: Settings) -> 
         cap.client, write_settings, subject="dv.ds", text="stars also include half steps 2.5"
     )
     assert "conflicts" not in result.structured
+
+
+# --- near-duplicate rejection ---
+
+
+def _stored_note(text: str) -> dict:
+    return {
+        "id": "dv.ds@t0",
+        "subject": "dv.ds",
+        "type": "Note",
+        "kind": "semantic",
+        "text": text,
+        "valid_from": "t0",
+    }
+
+
+async def test_paraphrase_of_existing_note_is_rejected(write_settings: Settings) -> None:
+    existing = _stored_note(
+        "DAMAGE_PROPERTY is a string with K/M suffix like 10.00K, parse before summing"
+    )
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="Parse DAMAGE_PROPERTY before summing: string with K/M suffix like 10.00K",
+    )
+
+    assert result.structured["action"] == "duplicate"
+    assert result.structured["id"] is None
+    assert "already covers this" in result.text
+    assert "DAMAGE_PROPERTY" in result.structured["duplicateOf"]
+    assert len(cap.requests) == 1  # the current-row lookup only; nothing written
+
+
+async def test_paraphrase_with_new_number_is_not_a_duplicate(write_settings: Settings) -> None:
+    existing = _stored_note(
+        "DAMAGE_PROPERTY is a string with K/M suffix like 10.00K, parse before summing"
+    )
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="DAMAGE_PROPERTY is a string with K/M suffix like 25.00M, parse before summing",
+    )
+
+    assert result.structured["action"] == "superseded"
+
+
+async def test_paraphrase_with_source_query_still_lands(write_settings: Settings) -> None:
+    existing = _stored_note(
+        "DAMAGE_PROPERTY is a string with K/M suffix like 10.00K, parse before summing"
+    )
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="Parse DAMAGE_PROPERTY before summing: string with K/M suffix like 10.00K",
+        source_query="SELECT DAMAGE_PROPERTY FROM dv.ds LIMIT 1;",
+    )
+
+    assert result.structured["action"] == "superseded"
+
+
+async def test_paraphrase_with_replaces_still_lands(write_settings: Settings) -> None:
+    existing = _stored_note(
+        "DAMAGE_PROPERTY is a string with K/M suffix like 10.00K, parse before summing"
+    )
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="Parse DAMAGE_PROPERTY before summing: string with K/M suffix like 10.00K",
+        replaces="parse before summing",
+    )
+
+    assert result.structured["action"] == "superseded"
+
+
+async def test_paraphrase_of_overlay_block_is_rejected(write_settings: Settings) -> None:
+    existing = {
+        "id": "dv.ds@t0",
+        "subject": "dv.ds",
+        "type": "AsterixDB Dataset",
+        "core": "core facts",
+        "overlay": "county names carry a County suffix in hospitals data\n\nother note here",
+        "text": "core facts\n\ncounty names carry a County suffix in hospitals data",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="in hospitals data county names carry a County suffix",
+    )
+
+    assert result.structured["action"] == "duplicate"
+    assert len(cap.requests) == 1
+
+
+async def test_long_duplicate_preview_is_truncated(write_settings: Settings) -> None:
+    words = "alpha beta gamma delta epsilon zeta eta theta iota kappa " * 6
+    existing = _stored_note(words.strip())
+    cap = make_capturing_cc(write_settings, handler=_store_handler(existing))
+
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="dv.ds",
+        text="kappa iota theta eta zeta epsilon delta gamma beta alpha",
+    )
+
+    assert result.structured["action"] == "duplicate"
+    assert result.structured["duplicateOf"].endswith("…")
+
+
+def test_near_duplicate_block_pure_cases() -> None:
+    from asterixdb_mcp.tools.memory_write import near_duplicate_block
+
+    assert near_duplicate_block("note text here", "") is None  # nothing stored
+    assert near_duplicate_block("!!! ??", "some stored note") is None  # no claim tokens
+    assert (
+        near_duplicate_block(
+            "hospitals dataset keyed by uid string",
+            "flood zones use polygon geometry\n\nhospitals dataset keyed by uid string values",
+        )
+        == "hospitals dataset keyed by uid string values"
+    )
+    assert (
+        near_duplicate_block(
+            "totally different claim about substations voltage",
+            "hospitals dataset keyed by uid string",
+        )
+        is None
+    )
