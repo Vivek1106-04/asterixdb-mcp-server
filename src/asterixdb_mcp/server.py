@@ -290,8 +290,10 @@ MEMORY_WRITE_DESCRIPTION = (
     "caveat, a proven query pattern, business meaning of a field. Address it by `subject` "
     "(the concept identity, e.g. 'MyDataverse.MyDataset'): notes on a catalog concept are "
     "appended to its learned overlay and survive catalog refreshes; other subjects become "
-    "standalone note concepts. Reconciliation is bi-temporal — nothing is deleted, changed "
-    "facts are superseded. Duplicate notes are a no-op, and near-duplicate paraphrases are "
+    "standalone note concepts. A bare dataset name is canonicalized to its "
+    "'Dataverse.Dataset' identity automatically when the match is unambiguous. "
+    "Reconciliation is bi-temporal — nothing is deleted, changed facts are superseded. "
+    "Duplicate notes are a no-op, and near-duplicate paraphrases are "
     "rejected: if a learned note attached to an earlier tool response already states the "
     "fact, do NOT re-write it — write only genuinely new facts.\n\n"
     "CORRECTING A WRONG NOTE: overlay notes are append-only, so writing a correction alone "
@@ -324,7 +326,11 @@ MEMORY_TOOL_NAMES = ("memory_search", "memory_write", "remember_preference")
 SERVER_INSTRUCTIONS_NO_MEMORY = (
     "This server gives you read access to an AsterixDB cluster.\n\n"
     "Ground queries in inspected schema, never guesses: list_dataverses / "
-    "list_datasets / get_schema before first use of a dataset in a session."
+    "list_datasets / get_schema before first use of a dataset in a session.\n\n"
+    "ONE QUERY PER QUESTION: answer each analytical question with a single "
+    "combined SQL++ query (LET, subqueries, multiple aggregates in one GROUP "
+    "BY) instead of a sequence of simple probes; get_reference('queries') "
+    "shows the patterns."
 )
 
 SERVER_INSTRUCTIONS = (
@@ -347,7 +353,10 @@ SERVER_INSTRUCTIONS = (
     "/ get_schema before first use of a dataset in a session if memory had no answer.\n"
     "5. RECORD PREFERENCES: when the user states a standing rule for HOW you should write "
     "queries (project columns, quote reserved words, prefer a dataverse), call "
-    "remember_preference so it primes every future session's start briefing."
+    "remember_preference so it primes every future session's start briefing.\n"
+    "6. ONE QUERY PER QUESTION: answer each analytical question with a single combined SQL++ "
+    "query (LET, subqueries, multiple aggregates in one GROUP BY) instead of a sequence of "
+    "simple probes; get_reference('queries') shows the patterns."
 )
 
 SEARCH_METADATA_DESCRIPTION = (
@@ -369,11 +378,15 @@ GET_NODE_DETAILS_DESCRIPTION = (
 )
 
 GET_REFERENCE_DESCRIPTION = (
-    "Read curated AsterixDB SQL++ reference material to ground yourself BEFORE writing queries: "
-    "syntax rules, the type system, index types, inline optimizer hints (query-hints), common "
-    "error codes, worked query examples, and the built-in function catalog. Pass a single "
-    "`topic`, or `all` to retrieve every topic at "
-    "once. This is the authoritative in-gateway documentation — prefer it over guessing syntax."
+    "Read curated AsterixDB SQL++ reference material: syntax rules, the type system, index "
+    "types, inline optimizer hints (query-hints), common error codes, worked query examples, "
+    "and the built-in function catalog. Pass a single `topic`, or `all` to retrieve every "
+    "topic at once.\n\n"
+    "USE BEFORE answering any aggregation, join, or multi-part question: SQL++ can express "
+    "these as ONE combined query (LET, subqueries, multiple aggregates in one GROUP BY) — one "
+    "round trip instead of a sequence of simple probe queries. Also USE on any query error or "
+    "unfamiliar syntax. This is the authoritative in-gateway documentation — prefer it over "
+    "guessing."
 )
 
 DATABASE_HEALTH_CHECK_DESCRIPTION = (

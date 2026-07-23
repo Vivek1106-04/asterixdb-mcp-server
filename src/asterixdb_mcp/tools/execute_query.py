@@ -17,7 +17,7 @@ from ..compiler_params import validate_compiler_parameters
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..egress import COLUMNAR_FLAGGED_MAX_ROWS, bound_rows_for_llm, minimized_caps
-from ..errors import GatewayError
+from ..errors import ErrorType, GatewayError
 from ..plan_guard import ColumnarAdvisory, assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
 from . import ToolResult
@@ -30,6 +30,26 @@ MAX_LIMIT = 1000
 
 # Re-exported for tests/readers; the flagged egress ceilings live in egress.py.
 __all__ = ["COLUMNAR_FLAGGED_MAX_ROWS", "DEFAULT_LIMIT", "MAX_LIMIT", "run_execute_query"]
+
+# Appended to syntax/semantic failures: the in-gateway reference documents the
+# exact error codes and correct SQL++ patterns, but models rarely consult it
+# unprompted — the error is the moment they will.
+REFERENCE_HINT = (
+    "Consult get_reference('errors') for this error code and "
+    "get_reference('queries') for correct SQL++ patterns."
+)
+_HINTED_ERRORS = frozenset({ErrorType.SYNTAX_ERROR, ErrorType.SEMANTIC_ERROR})
+
+
+def _with_reference_hint(err: GatewayError) -> GatewayError:
+    """Return the error with the reference pointer appended when it can help."""
+    if err.error_type not in _HINTED_ERRORS:
+        return err
+    return GatewayError(
+        err.error_type,
+        err.message + " " + REFERENCE_HINT,
+        asterix_code=err.asterix_code,
+    )
 
 
 async def run_execute_query(
@@ -82,7 +102,7 @@ async def run_execute_query(
             client,
             client_context_id,
             statement,
-            ToolResult.error(err),
+            ToolResult.error(_with_reference_hint(err)),
             recall=recall,
             settings=settings,
         )

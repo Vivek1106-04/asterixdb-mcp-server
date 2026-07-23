@@ -720,3 +720,93 @@ def test_near_duplicate_block_pure_cases() -> None:
         )
         is None
     )
+
+
+# --- subject canonicalization ---
+
+_INVENTORY = [
+    {"DataverseName": "real_estate", "DatasetName": "flood_zones"},
+    {"DataverseName": "real_estate", "DatasetName": "hospitals"},
+    {"DataverseName": "Yelp", "DatasetName": "Business"},
+    {"DataverseName": "Yelp", "DatasetName": "shared_name"},
+    {"DataverseName": "borg", "DatasetName": "shared_name"},
+]
+
+
+def _canon_handler(existing: dict | None):
+    """Serve the inventory query, then the current-row lookup, then acks."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        stmt = _form_of(req)["statement"]
+        if "Metadata" in stmt:
+            return httpx.Response(200, json={"status": "success", "results": _INVENTORY})
+        if stmt.lstrip().startswith("SELECT"):
+            rows = [existing] if existing else []
+            return httpx.Response(200, json={"status": "success", "results": rows})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    return handler
+
+
+async def test_bare_dataset_subject_is_canonicalized(write_settings: Settings) -> None:
+    cap = make_capturing_cc(write_settings, handler=_canon_handler(None))
+    result = await run_memory_write(
+        cap.client, write_settings, subject="flood_zones", text="sfha is T or F"
+    )
+    assert result.structured["subject"] == "real_estate.flood_zones"
+    assert result.structured["canonicalizedFrom"] == "flood_zones"
+    assert result.structured["action"] == "created"
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "real_estate.flood_zones",  # already qualified
+        "real_estate/type/AcsType",  # slash identity
+        "shared_name",  # ambiguous across dataverses
+        "not_in_catalog",  # unknown name
+        "Yelp",  # a dataverse, valid subject as-is
+    ],
+)
+async def test_subjects_that_stay_unchanged(write_settings: Settings, subject: str) -> None:
+    cap = make_capturing_cc(write_settings, handler=_canon_handler(None))
+    result = await run_memory_write(cap.client, write_settings, subject=subject, text="a note")
+    assert result.structured["subject"] == subject
+    assert "canonicalizedFrom" not in result.structured
+
+
+async def test_unreachable_catalog_never_blocks_the_write(write_settings: Settings) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        stmt = _form_of(req)["statement"]
+        if "Metadata" in stmt:
+            return httpx.Response(500, json={"status": "fatal"})
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    cap = make_capturing_cc(write_settings, handler=handler)
+    result = await run_memory_write(
+        cap.client, write_settings, subject="flood_zones", text="a note"
+    )
+    assert result.structured["action"] == "created"
+    assert result.structured["subject"] == "flood_zones"  # best-effort fallback
+
+
+async def test_canonicalized_subject_hits_near_duplicate_check(
+    write_settings: Settings,
+) -> None:
+    existing = {
+        "id": "real_estate.flood_zones@t0",
+        "subject": "real_estate.flood_zones",
+        "type": "Note",
+        "kind": "semantic",
+        "text": "sfha field is T for hazard areas and F otherwise",
+        "valid_from": "t0",
+    }
+    cap = make_capturing_cc(write_settings, handler=_canon_handler(existing))
+    result = await run_memory_write(
+        cap.client,
+        write_settings,
+        subject="flood_zones",
+        text="F otherwise and T for hazard areas is the sfha field",
+    )
+    assert result.structured["action"] == "duplicate"
+    assert result.structured["canonicalizedFrom"] == "flood_zones"

@@ -322,3 +322,29 @@ async def test_first_successful_query_carries_notes_then_dedups(settings: Settin
         cap.client, settings, statement="SELECT name FROM Yelp.Business LIMIT 2;", recall=recall
     )
     assert "learnedNotes" not in second.structured
+
+
+async def test_syntax_error_carries_reference_hint(settings: Settings) -> None:
+    body = {
+        "status": "fatal",
+        "errors": [{"code": "ASX1001", "msg": "Syntax error: unexpected token"}],
+    }
+    cap = make_capturing_cc(settings, response_json=body)
+
+    result = await run_execute_query(cap.client, settings, statement="SELEC x;")
+
+    assert result.is_error is True
+    assert result.structured["errorType"] == ErrorType.SYNTAX_ERROR.value
+    assert "get_reference('errors')" in result.structured["errorMessage"]
+
+
+async def test_non_syntax_error_carries_no_reference_hint(settings: Settings) -> None:
+    body = {
+        "status": "fatal",
+        "errors": [{"code": "ASX1063", "msg": "A readonly query cannot contain ..."}],
+    }
+    cap = make_capturing_cc(settings, response_json=body)
+
+    result = await run_execute_query(cap.client, settings, statement="DELETE FROM x;")
+
+    assert "get_reference" not in result.structured["errorMessage"]
