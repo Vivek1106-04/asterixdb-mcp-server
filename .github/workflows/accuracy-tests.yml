@@ -1,0 +1,87 @@
+name: Accuracy Tests
+
+# LLM tool-calling accuracy suite. Costs real API spend and needs a live
+# AsterixDB cluster, so it is opt-in: run it manually, or add the
+# `accuracy-tests` label to a pull request.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  accuracy:
+    name: Run accuracy tests
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'accuracy-tests'
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      # Apache AsterixDB server assembly used to boot the sample cluster.
+      # Override to test against a specific build.
+      ASTERIXDB_SERVER_URL: >-
+        https://archive.apache.org/dist/asterixdb/asterixdb-0.9.9/apache-asterixdb-0.9.9-server.zip
+      ACCURACY_CC_BASE_URL: http://localhost:19002
+      ACCURACY_ANTHROPIC_API_KEY: ${{ secrets.ACCURACY_ANTHROPIC_API_KEY }}
+      ACCURACY_OPENAI_API_KEY: ${{ secrets.ACCURACY_OPENAI_API_KEY }}
+      ACCURACY_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Boot AsterixDB sample cluster
+        run: |
+          curl -fsSL "$ASTERIXDB_SERVER_URL" -o asterixdb-server.zip
+          unzip -q asterixdb-server.zip -d asterixdb-server
+          CLUSTER_DIR="$(dirname "$(find asterixdb-server -path '*/opt/local/bin/start-sample-cluster.sh' | head -1)")"
+          echo "Starting cluster from ${CLUSTER_DIR}"
+          (cd "${CLUSTER_DIR}/../.." && bash bin/start-sample-cluster.sh)
+          bash scripts/accuracy/wait_for_cluster.sh "$ACCURACY_CC_BASE_URL" 180
+
+      - name: Install gateway with accuracy extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,accuracy]'
+
+      - name: Run accuracy suite
+        env:
+          ACCURACY_LOAD_DATA: "1"
+        run: |
+          pytest tests/accuracy -m accuracy -v
+
+      - name: Render markdown brief
+        if: always()
+        run: |
+          RESULT_FILE="$(find .accuracy/results -name "${ACCURACY_RUN_ID}.json" | head -1)"
+          if [ -n "$RESULT_FILE" ]; then
+            python -m tests.accuracy.sdk.report "$RESULT_FILE" --out .accuracy/brief.md
+          else
+            echo "No results file produced." | tee .accuracy/brief.md
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-results
+          path: .accuracy/
+
+      - name: Comment brief on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: accuracy-tests
+          recreate: true
+          path: .accuracy/brief.md
