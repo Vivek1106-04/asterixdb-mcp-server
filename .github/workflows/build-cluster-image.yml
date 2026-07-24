@@ -1,0 +1,43 @@
+name: Build cluster image
+
+# Builds the single-node AsterixDB CI image and publishes it to GHCR. Run this
+# when the pinned cluster version changes; the CI workflows then pull the image
+# as a `services:` container instead of booting a cluster from an assembly.
+on:
+  workflow_dispatch:
+    inputs:
+      asterixdb_server_url:
+        description: AsterixDB server assembly (.zip) to bake into the image
+        required: false
+        default: https://archive.apache.org/dist/asterixdb/asterixdb-0.9.9/apache-asterixdb-0.9.9-server.zip
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/asterixdb
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/asterixdb.Dockerfile
+          build-args: |
+            ASTERIXDB_SERVER_URL=${{ inputs.asterixdb_server_url }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}

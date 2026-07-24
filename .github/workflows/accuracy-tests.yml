@@ -19,10 +19,6 @@ jobs:
       contents: read
       pull-requests: write
     env:
-      # Apache AsterixDB server assembly used to boot the sample cluster.
-      # Override to test against a specific build.
-      ASTERIXDB_SERVER_URL: >-
-        https://archive.apache.org/dist/asterixdb/asterixdb-0.9.9/apache-asterixdb-0.9.9-server.zip
       ACCURACY_CC_BASE_URL: http://localhost:19002
       ACCURACY_ANTHROPIC_API_KEY: ${{ secrets.ACCURACY_ANTHROPIC_API_KEY }}
       ACCURACY_OPENAI_API_KEY: ${{ secrets.ACCURACY_OPENAI_API_KEY }}
@@ -42,13 +38,9 @@ jobs:
           python-version: "3.11"
 
       - name: Boot AsterixDB sample cluster
-        run: |
-          curl -fsSL "$ASTERIXDB_SERVER_URL" -o asterixdb-server.zip
-          unzip -q asterixdb-server.zip -d asterixdb-server
-          CLUSTER_DIR="$(dirname "$(find asterixdb-server -path '*/opt/local/bin/start-sample-cluster.sh' | head -1)")"
-          echo "Starting cluster from ${CLUSTER_DIR}"
-          (cd "${CLUSTER_DIR}/../.." && bash bin/start-sample-cluster.sh)
-          bash scripts/accuracy/wait_for_cluster.sh "$ACCURACY_CC_BASE_URL" 180
+        run: bash scripts/ci/boot_cluster.sh
+        env:
+          CC_BASE_URL: ${{ env.ACCURACY_CC_BASE_URL }}
 
       - name: Install gateway with accuracy extras
         run: |

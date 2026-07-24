@@ -49,10 +49,12 @@ packages = ["src/asterixdb_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Accuracy tests need a live cluster and LLM API keys; they are opt-in and are
-# deselected from the default run. Trigger them with `-m accuracy`.
-addopts = "-ra -m 'not accuracy'"
+# Live and accuracy tests need a running cluster (and, for accuracy, LLM API
+# keys); they are opt-in and deselected from the default run. Trigger them with
+# `-m live` or `-m accuracy`.
+addopts = "-ra -m 'not accuracy and not live'"
 markers = [
+    "live: integration tests against a running cluster, no LLM (safe on every PR)",
     "accuracy: end-to-end LLM tool-calling accuracy tests (live cluster + API keys)",
 ]
 
