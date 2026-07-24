@@ -63,6 +63,7 @@ def _memory_bootstrap_statements() -> frozenset[str]:
 
     return frozenset(BOOTSTRAP_STATEMENTS)
 
+
 # Acceptable JSON values that the CC may use for a successful query envelope.
 _SUCCESS_STATUSES = frozenset({"success"})
 

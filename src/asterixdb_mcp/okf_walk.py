@@ -183,9 +183,7 @@ async def fetch_bundle(client: CCClient, ccid: str) -> dict[str, dict[str, Any]]
 
 async def fetch_current(client: CCClient, ccid: str) -> dict[str, dict[str, Any]]:
     """Current walk-kind rows in the store, keyed by subject."""
-    envelope = await client.execute(
-        CURRENT_ROWS_QUERY.format(kind=KIND), client_context_id=ccid
-    )
+    envelope = await client.execute(CURRENT_ROWS_QUERY.format(kind=KIND), client_context_id=ccid)
     return {
         row["subject"]: row
         for row in envelope.get("results", [])

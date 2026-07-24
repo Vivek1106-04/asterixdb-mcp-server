@@ -613,9 +613,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         if auth is not None:
             mcp_kwargs["auth"] = auth
             mcp_kwargs["token_verifier"] = token_verifier
-    instructions = (
-        SERVER_INSTRUCTIONS if settings.memory_enabled else SERVER_INSTRUCTIONS_NO_MEMORY
-    )
+    instructions = SERVER_INSTRUCTIONS if settings.memory_enabled else SERVER_INSTRUCTIONS_NO_MEMORY
     mcp = FastMCP("asterixdb-mcp-server", instructions=instructions, **mcp_kwargs)
 
     def _client() -> CCClient:

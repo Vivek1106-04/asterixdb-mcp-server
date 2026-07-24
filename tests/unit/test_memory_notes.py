@@ -405,9 +405,7 @@ async def test_delivery_reinforces_when_writes_enabled(settings: Settings) -> No
     cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
     base = ToolResult(text="ok", structured={"status": "success"})
 
-    await attach_statement_notes(
-        cap.client, "ccid", "SELECT * FROM D.s;", base, settings=settings
-    )
+    await attach_statement_notes(cap.client, "ccid", "SELECT * FROM D.s;", base, settings=settings)
 
     upserts = [
         parse_qs(r.content.decode())
@@ -426,9 +424,7 @@ async def test_no_reinforcement_when_writes_disabled(settings: Settings) -> None
     cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
     base = ToolResult(text="ok", structured={"status": "success"})
 
-    await attach_statement_notes(
-        cap.client, "ccid", "SELECT * FROM D.s;", base, settings=settings
-    )
+    await attach_statement_notes(cap.client, "ccid", "SELECT * FROM D.s;", base, settings=settings)
 
     statements = [parse_qs(r.content.decode())["statement"][0] for r in cap.requests]
     assert not any("UPSERT" in s for s in statements)  # read-only: no bump

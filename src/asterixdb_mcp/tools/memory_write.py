@@ -66,8 +66,23 @@ NEAR_DUP_THRESHOLD = 0.8
 DUP_PREVIEW_LEN = 160
 # Structural words carry no claim; excluding them keeps the label-match honest.
 _CONFLICT_STOPWORDS = frozenset(
-    {"the", "and", "for", "with", "not", "are", "was", "this",
-     "that", "from", "use", "using", "into", "have", "has"}
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "not",
+        "are",
+        "was",
+        "this",
+        "that",
+        "from",
+        "use",
+        "using",
+        "into",
+        "have",
+        "has",
+    }
 )
 
 _CURRENT_QUERY = (
@@ -319,9 +334,7 @@ def _canonicalized_field(subject: str, original: str) -> dict[str, str]:
 def _duplicate_result(
     subject: str, duplicate: str, original_subject: str, grounded: bool = False
 ) -> ToolResult:
-    preview = (
-        duplicate if len(duplicate) <= DUP_PREVIEW_LEN else duplicate[:DUP_PREVIEW_LEN] + "…"
-    )
+    preview = duplicate if len(duplicate) <= DUP_PREVIEW_LEN else duplicate[:DUP_PREVIEW_LEN] + "…"
     if grounded:
         guidance = (
             "The stored note is already grounded; your confirmation reinforced it — "

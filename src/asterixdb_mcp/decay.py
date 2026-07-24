@@ -31,8 +31,7 @@ DECAY_AFTER_DAYS = 30.0
 
 NOTE_TYPE = "Note"
 _CANDIDATES_QUERY = (
-    "SELECT VALUE m FROM AgentMemory.Memory m "
-    'WHERE m.valid_to IS UNKNOWN AND m.`type` = "Note";'
+    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.valid_to IS UNKNOWN AND m.`type` = "Note";'
 )
 _ARCHIVE_UPSERT = "UPSERT INTO AgentMemory.Memory ([$row]);"
 

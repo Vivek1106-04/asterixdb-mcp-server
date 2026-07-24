@@ -56,14 +56,10 @@ class BriefingState:
 
 
 def _columnar_count(rows: list[dict[str, Any]]) -> int:
-    return sum(
-        1 for row in rows if extract_dataset_format_info(row).get("format") == "COLUMNAR"
-    )
+    return sum(1 for row in rows if extract_dataset_format_info(row).get("format") == "COLUMNAR")
 
 
-def render_briefing(
-    dataset_rows: list[dict[str, Any]], preferences: list[str]
-) -> str:
+def render_briefing(dataset_rows: list[dict[str, Any]], preferences: list[str]) -> str:
     """Render the compact briefing block from inventory rows and preferences.
 
     Returns an empty string when there is nothing worth saying (no user

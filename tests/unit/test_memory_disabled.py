@@ -59,9 +59,7 @@ async def test_memory_tools_absent_and_instructions_swapped(
 async def test_briefing_skipped(disabled_settings: Settings) -> None:
     cap = make_capturing_cc(disabled_settings)
     result = ToolResult(text="tool output", structured={"status": "success"})
-    attached = await maybe_attach_briefing(
-        cap.client, disabled_settings, BriefingState(), result
-    )
+    attached = await maybe_attach_briefing(cap.client, disabled_settings, BriefingState(), result)
     assert attached is result
     assert cap.requests == []
 

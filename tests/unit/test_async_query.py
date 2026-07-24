@@ -608,9 +608,7 @@ async def test_wait_timeout_feeds_memory_capture(
     assert event["client"] == "antigravity/1.0"
     # The failure is pending in CaptureState: a later working form pairs with it.
     fixed = "SELECT c FROM ShopDV.customers b UNNEST split(b.tags, ',') c;"
-    expected_note = (
-        f"A query on this dataset failed (TIMEOUT): {failing} | working form: {fixed}"
-    )
+    expected_note = f"A query on this dataset failed (TIMEOUT): {failing} | working form: {fixed}"
     assert state.record(fixed, None) == [("ShopDV.customers", expected_note)]
 
 

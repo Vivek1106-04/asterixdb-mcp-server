@@ -448,9 +448,7 @@ async def test_bootstrap_ddl_allowed_by_exact_match_only(write_settings: Setting
     from asterixdb_mcp.okf_walk import BOOTSTRAP_STATEMENTS
 
     cap = make_capturing_cc(write_settings)
-    await cap.client.execute_memory_write(
-        BOOTSTRAP_STATEMENTS[0], client_context_id="sess::t::1"
-    )
+    await cap.client.execute_memory_write(BOOTSTRAP_STATEMENTS[0], client_context_id="sess::t::1")
     assert len(cap.requests) == 1
 
     # any deviation from the canonical string is rejected — no DDL side door

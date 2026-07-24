@@ -168,9 +168,7 @@ def test_error_signal_zero_rows_with_warnings_is_semantic() -> None:
 
 
 def test_error_signal_handles_string_warnings() -> None:
-    result = ToolResult(
-        text="ok", structured={"rowsReturned": 0, "warnings": ["plain warning"]}
-    )
+    result = ToolResult(text="ok", structured={"rowsReturned": 0, "warnings": ["plain warning"]})
     assert capture_error_signal(result) == "SEMANTIC_WARNING: plain warning"
 
 
@@ -272,6 +270,7 @@ async def test_flush_survives_undeletable_buffer(
         cap.client, settings, CaptureState(), statement=FIX, result_error=None
     )
     assert len(cap.requests) == 2  # live + replayed; failed unlink swallowed
+
 
 # event enrichment (client identity + performance metrics)
 

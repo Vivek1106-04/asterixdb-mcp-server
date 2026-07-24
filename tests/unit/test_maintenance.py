@@ -87,9 +87,7 @@ async def test_pass_runs_all_steps_and_releases_lock(
     assert not lock.exists()
 
 
-async def test_contended_lock_skips_the_pass(
-    lock: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_contended_lock_skips_the_pass(lock: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lock.write_text(json.dumps({"pid": 0, "ts": time.time()}))
 
     async def fail_pass(settings: Settings) -> None:  # pragma: no cover - must not run
@@ -165,9 +163,7 @@ def test_stale_lock_unlink_race_loses_gracefully(
     lock.write_text("{}")
     old = time.time() - maintenance.LOCK_STALE_S - 5
     os.utime(lock, (old, old))
-    monkeypatch.setattr(
-        Path, "unlink", lambda self: (_ for _ in ()).throw(OSError("gone"))
-    )
+    monkeypatch.setattr(Path, "unlink", lambda self: (_ for _ in ()).throw(OSError("gone")))
     assert acquire_lock(lock) is False  # cannot break -> concede
 
 

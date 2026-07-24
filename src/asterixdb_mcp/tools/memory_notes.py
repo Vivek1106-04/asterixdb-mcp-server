@@ -62,9 +62,7 @@ _FROM_RE = re.compile(
 )
 
 
-async def fetch_note_rows(
-    client: CCClient, ccid: str, subjects: list[str]
-) -> list[dict[str, Any]]:
+async def fetch_note_rows(client: CCClient, ccid: str, subjects: list[str]) -> list[dict[str, Any]]:
     """Current note-bearing memory rows for the given subjects, ranked by score.
 
     Direct subject hits are followed one hop across their ``links`` so a
@@ -102,9 +100,7 @@ async def _query_note_rows(
         )
     except GatewayError:
         return []
-    return [
-        row for row in envelope.get("results", []) if isinstance(row, dict) and _note_text(row)
-    ]
+    return [row for row in envelope.get("results", []) if isinstance(row, dict) and _note_text(row)]
 
 
 def _link_subjects(rows: list[dict[str, Any]], seen: set[str]) -> list[str]:

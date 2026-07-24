@@ -168,9 +168,7 @@ def test_auto_distill_installed_only_when_enabled() -> None:
 def test_auto_distill_requires_memory_writes() -> None:
     settings = Settings(transport="http", auth_mode="none", distill_interval_s=60)
     app = build_http_app(server_module.build_server(settings), settings)
-    assert "_install_auto_distill" not in getattr(
-        app.router.lifespan_context, "__qualname__", ""
-    )
+    assert "_install_auto_distill" not in getattr(app.router.lifespan_context, "__qualname__", "")
 
 
 @pytest.mark.anyio

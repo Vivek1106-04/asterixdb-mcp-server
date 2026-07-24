@@ -48,8 +48,7 @@ MAX_PREF_LEN = 500
 _SUBJECT_PREFIX = "_pref/"
 
 _CURRENT_QUERY = (
-    f"SELECT VALUE m FROM {MEMORY_DATASET} m "
-    "WHERE m.subject = $subject AND m.valid_to IS UNKNOWN;"
+    f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = $subject AND m.valid_to IS UNKNOWN;"
 )
 _ACTIVE_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m "
@@ -151,9 +150,7 @@ async def _fetch_current(client: CCClient, ccid: str, subject: str) -> list[dict
     return [row for row in envelope.get("results", []) if isinstance(row, dict)]
 
 
-async def fetch_active_preferences(
-    client: CCClient, ccid: str, scopes: list[str]
-) -> list[str]:
+async def fetch_active_preferences(client: CCClient, ccid: str, scopes: list[str]) -> list[str]:
     """Current preference texts for the given scopes (best-effort, deduplicated).
 
     Any store failure degrades to an empty list so a briefing that cannot read

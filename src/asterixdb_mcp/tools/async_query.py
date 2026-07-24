@@ -229,9 +229,7 @@ async def _capture_terminal_outcome(
     client_name: str | None,
 ) -> None:
     """Feed an async query's terminal outcome through memory capture (best-effort)."""
-    error_signal = (
-        None if status == _SUCCESS_STATUS else _FAILURE_ERROR_TYPES[status].value
-    )
+    error_signal = None if status == _SUCCESS_STATUS else _FAILURE_ERROR_TYPES[status].value
     await capture_query_outcome(
         client,
         settings,

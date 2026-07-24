@@ -56,9 +56,7 @@ async def test_empty_text_rejected(settings: Settings) -> None:
 async def test_overlong_text_rejected(settings: Settings) -> None:
     settings = _writable(settings)
     cap = make_capturing_cc(settings)
-    result = await run_remember_preference(
-        cap.client, settings, text="x" * (MAX_PREF_LEN + 1)
-    )
+    result = await run_remember_preference(cap.client, settings, text="x" * (MAX_PREF_LEN + 1))
     assert result.is_error is True
     assert result.structured["errorType"] == "INVALID_PARAMETER"
 
@@ -66,9 +64,7 @@ async def test_overlong_text_rejected(settings: Settings) -> None:
 async def test_invalid_scope_rejected(settings: Settings) -> None:
     settings = _writable(settings)
     cap = make_capturing_cc(settings)
-    result = await run_remember_preference(
-        cap.client, settings, text="rule", scope="bad scope!"
-    )
+    result = await run_remember_preference(cap.client, settings, text="rule", scope="bad scope!")
     assert result.is_error is True
     assert result.structured["errorType"] == "INVALID_PARAMETER"
 
@@ -105,9 +101,7 @@ async def test_duplicate_preference_is_noop(settings: Settings) -> None:
     settings = _writable(settings)
     existing = [{"subject": "_pref/global", "type": "Preference", "text": "quote reserved words"}]
     cap = make_capturing_cc(settings, response_json={"status": "success", "results": existing})
-    result = await run_remember_preference(
-        cap.client, settings, text="quote reserved words"
-    )
+    result = await run_remember_preference(cap.client, settings, text="quote reserved words")
     assert result.structured["action"] == "unchanged"
     assert result.structured["id"] is None
     statements = [parse_qs(r.content.decode())["statement"][0] for r in cap.requests]
