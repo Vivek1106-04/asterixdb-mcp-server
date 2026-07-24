@@ -104,7 +104,10 @@ async def run_startup_maintenance(settings: Settings) -> None:
         return
     try:
         await asyncio.wait_for(_maintenance_pass(settings), MAINTENANCE_TIMEOUT_S)
-    except TimeoutError:
+    # On Python 3.10 wait_for raises asyncio.TimeoutError, a distinct class from
+    # the builtin (they merged in 3.11); catch both so the timeout path is hit
+    # on every supported version.
+    except (TimeoutError, asyncio.TimeoutError):
         logger.warning(
             "startup maintenance timed out after %ss; serving anyway", MAINTENANCE_TIMEOUT_S
         )
