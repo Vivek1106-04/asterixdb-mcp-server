@@ -32,12 +32,19 @@ Defense-in-Depth:
 
 from __future__ import annotations
 
-import re
-from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
 from ..cc_client import CCClient
+from ..claims import (
+    NUMBER_RE,
+    STOPWORDS,
+    WORD_RE,
+    fmt_values,
+    normalize_number,
+    numeric_claims,
+    values_conflict,
+)
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
@@ -56,34 +63,11 @@ KIND = "semantic"
 # never overlap, the write still lands (append-only truth), and the response
 # flags the possible contradiction so the model resolves it with `replaces`.
 MAX_REPORTED_CONFLICTS = 3
-_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
-_WORD_RE = re.compile(r"[A-Za-z][A-Za-z_]{2,}")
-_CONFLICT_CONTEXT_CHARS = 30
 # Near-duplicate rejection: a paraphrase whose content tokens are almost all
 # already present in one stored block adds noise, not knowledge. Containment
 # (not Jaccard) so a short restatement of a long stored note still matches.
 NEAR_DUP_THRESHOLD = 0.8
 DUP_PREVIEW_LEN = 160
-# Structural words carry no claim; excluding them keeps the label-match honest.
-_CONFLICT_STOPWORDS = frozenset(
-    {
-        "the",
-        "and",
-        "for",
-        "with",
-        "not",
-        "are",
-        "was",
-        "this",
-        "that",
-        "from",
-        "use",
-        "using",
-        "into",
-        "have",
-        "has",
-    }
-)
 
 _CURRENT_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = $subject AND m.valid_to IS UNKNOWN;"
@@ -261,8 +245,8 @@ def _content_tokens(text: str) -> set[str]:
     Numbers are included so a paraphrase carrying DIFFERENT figures is new
     information, never a near-duplicate of the stored note.
     """
-    words = {w.lower() for w in _WORD_RE.findall(text)} - _CONFLICT_STOPWORDS
-    numbers = {_normalize_number(n) for n in _NUMBER_RE.findall(text)}
+    words = {w.lower() for w in WORD_RE.findall(text)} - STOPWORDS
+    numbers = {normalize_number(n) for n in NUMBER_RE.findall(text)}
     return words | numbers
 
 
@@ -278,7 +262,7 @@ def near_duplicate_block(note: str, existing_text: str) -> str | None:
     new_tokens = _content_tokens(note)
     if not new_tokens:
         return None
-    new_numbers = {_normalize_number(n) for n in _NUMBER_RE.findall(note)}
+    new_numbers = {normalize_number(n) for n in NUMBER_RE.findall(note)}
     for block in (b.strip() for b in existing_text.split("\n\n")):
         if not block:
             continue
@@ -365,30 +349,6 @@ def _duplicate_result(
     )
 
 
-def _numeric_claims(text: str) -> dict[str, set[str]]:
-    """Map each nearby word to the numeric values it appears with in ``text``.
-
-    Numbers are normalized by float value so "1" and "1.0" agree; a word within
-    ``_CONFLICT_CONTEXT_CHARS`` of a number is that number's label.
-    """
-    claims: dict[str, set[str]] = defaultdict(set)
-    for match in _NUMBER_RE.finditer(text):
-        value = _normalize_number(match.group())
-        start = max(0, match.start() - _CONFLICT_CONTEXT_CHARS)
-        window = text[start : match.end() + _CONFLICT_CONTEXT_CHARS]
-        for word in _WORD_RE.findall(window):
-            lowered = word.lower()
-            if lowered not in _CONFLICT_STOPWORDS:
-                claims[lowered].add(value)
-    return claims
-
-
-def _normalize_number(raw: str) -> str:
-    # raw is always a _NUMBER_RE match, so float() cannot fail here; normalizing
-    # by value lets "1" and "1.0" compare equal.
-    return str(float(raw))
-
-
 def numeric_conflicts(new_note: str, existing_text: str) -> list[str]:
     """Human-readable descriptors of numeric claims that contradict the store.
 
@@ -400,32 +360,19 @@ def numeric_conflicts(new_note: str, existing_text: str) -> list[str]:
     """
     if not existing_text.strip():
         return []
-    new_claims = _numeric_claims(new_note)
-    old_claims = _numeric_claims(existing_text)
+    new_claims = numeric_claims(new_note)
+    old_claims = numeric_claims(existing_text)
     conflicts: list[str] = []
     for label, new_values in sorted(new_claims.items()):
         old_values = old_claims.get(label)
-        if old_values is None or not _values_conflict(new_values, old_values):
+        if old_values is None or not values_conflict(new_values, old_values):
             continue
         conflicts.append(
-            f"'{label}': stored {_fmt_values(old_values)} vs new {_fmt_values(new_values)}"
+            f"'{label}': stored {fmt_values(old_values)} vs new {fmt_values(new_values)}"
         )
         if len(conflicts) == MAX_REPORTED_CONFLICTS:
             break
     return conflicts
-
-
-def _values_conflict(new_values: set[str], old_values: set[str]) -> bool:
-    """True when some new value is neither a stored value nor within their range."""
-    if new_values & old_values:
-        return False
-    old_floats = [float(v) for v in old_values]
-    low, high = min(old_floats), max(old_floats)
-    return any(not (low <= float(v) <= high) for v in new_values)
-
-
-def _fmt_values(values: set[str]) -> str:
-    return ", ".join(sorted(values, key=float))
 
 
 def _conflict_warning(conflicts: list[str]) -> str:

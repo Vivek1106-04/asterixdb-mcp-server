@@ -19,6 +19,7 @@ from typing import Any
 from ..cc_client import CCClient
 from ..config import Settings
 from ..errors import GatewayError
+from ..staleness import SUSPECT_LABEL, check_rows, is_suspect, render_warning
 from . import ToolResult
 from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
 
@@ -131,9 +132,19 @@ def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def display_notes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The delivery shape of note rows: subject, note text, evidence status."""
+    """The delivery shape of note rows: subject, note text, evidence status.
+
+    ``suspect`` carries the doubt raised when fresh data contradicted the note
+    — set in this session, or inherited from a session that saw the same
+    disagreement and left the marker on the row.
+    """
     return [
-        {"subject": row.get("subject"), "note": _note_text(row), "grounded": _grounded(row)}
+        {
+            "subject": row.get("subject"),
+            "note": _note_text(row),
+            "grounded": _grounded(row),
+            "suspect": is_suspect(row),
+        }
         for row in rows
     ]
 
@@ -250,23 +261,43 @@ async def attach_statement_notes(
     if recall is not None and first_use_only:
         subjects = recall.fresh(subjects)
     rows = await fetch_note_rows(client, ccid, subjects)
-    notes = display_notes(rows)
-    if not notes:
+    if not rows:
         return result
+    # The rows that just came back are the only evidence the gateway will ever
+    # hold next to these notes; check them before the notes go out.
+    rows, contradictions = check_rows(rows, _result_rows(result))
+    notes = display_notes(rows)
     if recall is not None:
         recall.mark([str(n["subject"]) for n in notes if n.get("subject")])
+    # One write carries both the usage bump and any suspect marker, so the
+    # reinforcement cannot overwrite a flag raised a moment earlier.
     if settings is not None and settings.memory_write_enabled:
         await reinforce_notes(client, ccid, rows)
     structured = result.structured
     if structured is not None:
         structured = {**structured, "learnedNotes": notes}
+        if contradictions:
+            structured["staleNotes"] = contradictions
     return ToolResult(
         text=result.text
         + "\n\nLearned notes from memory about the referenced datasets:\n"
-        + render_notes(notes),
+        + render_notes(notes)
+        + render_warning(contradictions),
         structured=structured,
         is_error=result.is_error,
     )
+
+
+def _result_rows(result: ToolResult) -> list[Any]:
+    """The fresh rows a result carries, or none when it carries no evidence.
+
+    An error result has no rows to check against, and a tool whose payload is
+    not a row list (schema, plans) is out of scope for the value checks.
+    """
+    if result.is_error or not isinstance(result.structured, dict):
+        return []
+    rows = result.structured.get("results")
+    return rows if isinstance(rows, list) else []
 
 
 def render_notes(notes: list[dict[str, Any]]) -> str:
@@ -274,7 +305,10 @@ def render_notes(notes: list[dict[str, Any]]) -> str:
     lines = []
     for n in notes:
         grounded = n.get("grounded")
-        label = "" if grounded is None else (" (grounded)" if grounded else " (unverified)")
+        markers = [] if grounded is None else ["grounded" if grounded else "unverified"]
+        if n.get("suspect"):
+            markers.append(SUSPECT_LABEL)
+        label = f" ({', '.join(markers)})" if markers else ""
         lines.append(f"- [{n['subject']}]{label} {n['note']}")
     return "\n".join(lines)
 

@@ -66,8 +66,14 @@ async def test_fetch_returns_learned_notes_and_binds_subjects(settings: Settings
         "subject": "ShopDV.customers",
         "note": "the tags field is a CSV string",
         "grounded": False,
+        "suspect": False,
     }
-    assert by_subject["ShopDV"] == {"subject": "ShopDV", "note": "learned", "grounded": None}
+    assert by_subject["ShopDV"] == {
+        "subject": "ShopDV",
+        "note": "learned",
+        "grounded": None,
+        "suspect": False,
+    }
     form = parse_qs(cap.requests[0].content.decode())
     assert form["$subjects"][0] == '["ShopDV.customers", "ShopDV"]'
 
@@ -457,3 +463,120 @@ async def test_reinforce_degrades_on_store_error(settings: Settings) -> None:
     # Must not raise: reinforcement is best-effort metadata.
     await reinforce_notes(cap.client, "ccid", rows)
     _ = (ErrorType, GatewayError)  # imported to document the swallowed type
+
+
+# staleness: the fresh rows a note rides with are checked against it
+
+
+_DRIFT_NOTE = "Status breakdown: Operational (410), Low kV (17)."
+_DRIFTED_RESULT = {
+    "status": "success",
+    "results": [{"status": "Operational", "n": 290}, {"status": "Retired", "n": 120}],
+}
+
+
+async def test_contradicted_note_is_delivered_with_a_pointed_correction(
+    settings: Settings,
+) -> None:
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(text="Returned 2 row(s).", structured=_DRIFTED_RESULT)
+
+    result = await attach_statement_notes(
+        cap.client, "ccid", "SELECT status, count(*) n FROM RE.substations GROUP BY status;", base
+    )
+
+    assert result.structured["staleNotes"] == [
+        "- [RE.substations] 'operational': note says 410.0, this result shows 290.0"
+    ]
+    assert "STALE NOTE CHECK" in result.text
+    assert "memory_write" in result.text
+    # The note still goes out; detection casts doubt, it does not withhold.
+    assert _DRIFT_NOTE in result.text
+    assert result.structured["learnedNotes"][0]["suspect"] is True
+
+
+async def test_agreeing_note_carries_no_warning(settings: Settings) -> None:
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(
+        text="Returned 1 row(s).",
+        structured={"status": "success", "results": [{"status": "Operational", "n": 410}]},
+    )
+
+    result = await attach_statement_notes(cap.client, "ccid", "SELECT * FROM RE.substations;", base)
+
+    assert "staleNotes" not in result.structured
+    assert "STALE NOTE CHECK" not in result.text
+    assert result.structured["learnedNotes"][0]["suspect"] is False
+
+
+async def test_an_error_result_carries_no_evidence_to_check_against(settings: Settings) -> None:
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(text="QUERY_ERROR: boom", structured=_DRIFTED_RESULT, is_error=True)
+
+    result = await attach_statement_notes(cap.client, "ccid", "SELECT * FROM RE.substations;", base)
+
+    assert "staleNotes" not in result.structured
+
+
+async def test_results_that_are_not_a_row_list_are_not_checked(settings: Settings) -> None:
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    for structured in (None, {"status": "success"}, {"results": "scalar"}):
+        base = ToolResult(text="ok", structured=structured)
+        result = await attach_statement_notes(
+            cap.client, "ccid", "SELECT * FROM RE.substations;", base
+        )
+        assert result.structured is None or "staleNotes" not in result.structured
+
+
+async def test_the_suspect_marker_is_persisted_with_the_usage_bump(settings: Settings) -> None:
+    import json
+
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(text="ok", structured=_DRIFTED_RESULT)
+
+    await attach_statement_notes(
+        cap.client, "ccid", "SELECT * FROM RE.substations;", base, settings=settings
+    )
+
+    upserts = [
+        parse_qs(r.content.decode())
+        for r in cap.requests
+        if "UPSERT" in parse_qs(r.content.decode())["statement"][0]
+    ]
+    written = json.loads(upserts[0]["$row"][0])
+    # One write carries both, so reinforcement cannot erase the flag.
+    assert written["id"] == "RE.s@t0"
+    assert written["recall_count"] == 1
+    assert written["suspect_since"] and "operational" in written["suspect_reason"]
+
+
+async def test_inherited_suspect_marker_is_shown_without_rechecking(settings: Settings) -> None:
+    rows = [
+        {
+            "id": "RE.s@t0",
+            "subject": "RE.substations",
+            "type": "Note",
+            "text": "counts refreshed nightly",
+            "suspect_since": "2026-01-01T00:00:00+00:00",
+        }
+    ]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    base = ToolResult(text="ok", structured={"status": "success", "results": [{"n": 1}]})
+
+    result = await attach_statement_notes(cap.client, "ccid", "SELECT * FROM RE.substations;", base)
+
+    assert result.structured["learnedNotes"][0]["suspect"] is True
+    assert "possibly stale" in result.text
+    assert "STALE NOTE CHECK" not in result.text
+
+
+def test_render_marks_a_suspect_note_alongside_its_evidence_status() -> None:
+    notes = [{"subject": "A.B", "note": "n", "grounded": True, "suspect": True}]
+
+    assert render_notes(notes) == "- [A.B] (grounded, possibly stale) n"

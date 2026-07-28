@@ -186,6 +186,14 @@ End-user effect: install, point at a cluster, done — no scripts, no cron. `scr
 migration that labels overlay notes written before evidence labels existed as
 `(unverified)`, so legacy claims stop reading as verified fact.
 
+Delivered notes are checked against the rows they ride with. When a note's
+figure disagrees with a fresh value under the same category, or the note types
+a field the result returns as another type, the response names the
+disagreement and asks for a correction, and the note is marked `possibly
+stale` so a later session inherits the doubt. Detection only ever flags — the
+note is still delivered, its text is never rewritten, and the gateway never
+retires knowledge on its own inference.
+
 ### Resources
 
 | URI | Purpose |
