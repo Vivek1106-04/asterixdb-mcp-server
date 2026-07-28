@@ -12,7 +12,10 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Vivek Gangavarapu" }]
 keywords = ["mcp", "asterixdb", "llm", "sql++", "model-context-protocol"]
 dependencies = [
-    "mcp>=1.2.0",
+    # Capped at the 1.x line: mcp 2.0 removed mcp.server.fastmcp and renamed the
+    # ToolAnnotations fields to snake_case, which every tool registration here
+    # depends on. Lifting the cap is a migration, not a version bump.
+    "mcp>=1.2.0,<2",
     "httpx>=0.27",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
