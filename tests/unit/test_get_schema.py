@@ -200,7 +200,12 @@ async def test_learned_notes_ride_with_the_schema(settings: Settings) -> None:
 
     assert result.is_error is False
     assert result.structured["learnedNotes"] == [
-        {"subject": "ShopDV.customers", "note": "tags is a CSV string", "grounded": False}
+        {
+            "subject": "ShopDV.customers",
+            "note": "tags is a CSV string",
+            "grounded": False,
+            "suspect": False,
+        }
     ]
     assert "tags is a CSV string" in result.text
     assert HAVE_NOTES_HINT in result.text

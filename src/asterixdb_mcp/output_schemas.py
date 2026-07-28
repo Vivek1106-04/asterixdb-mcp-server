@@ -69,6 +69,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
     "execute_query": _obj(
         {
             "learnedNotes": _array_of_objects(),
+            "staleNotes": {"type": "array", "items": _STRING},
             "status": _STRING,
             "results": _result_rows(),
             "rowsReturned": _INT,
