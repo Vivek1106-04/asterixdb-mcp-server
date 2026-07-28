@@ -580,3 +580,142 @@ def test_render_marks_a_suspect_note_alongside_its_evidence_status() -> None:
     notes = [{"subject": "A.B", "note": "n", "grounded": True, "suspect": True}]
 
     assert render_notes(notes) == "- [A.B] (grounded, possibly stale) n"
+
+
+async def test_a_later_result_still_checks_notes_the_sample_already_carried(
+    settings: Settings,
+) -> None:
+    """The delivery and the disproof happen turns apart.
+
+    A model samples before it aggregates, so recall fires on the sample and the
+    count that contradicts the note arrives with no notes attached. Without the
+    carry-forward the contradiction is never seen at all.
+    """
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    recall = RecallState()
+
+    first = await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT VALUE d FROM RE.substations AS d LIMIT 5;",
+        ToolResult(text="ok", structured={"status": "success", "results": [{"status": "Retired"}]}),
+        recall=recall,
+        first_use_only=True,
+    )
+    assert "STALE NOTE CHECK" not in first.text  # a sample proves no counts
+
+    second = await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT s.status, count(*) n FROM RE.substations s GROUP BY s.status;",
+        ToolResult(text="ok", structured=_DRIFTED_RESULT),
+        recall=recall,
+        first_use_only=True,
+    )
+
+    assert second.structured["staleNotes"] == [
+        "- [RE.substations] 'operational': note says 410.0, this result shows 290.0"
+    ]
+    # The notes themselves are not repeated; only the disagreement is raised.
+    assert "learnedNotes" not in second.structured
+    assert "Learned notes from memory" not in second.text
+
+
+async def test_a_carried_note_the_later_result_agrees_with_stays_quiet(
+    settings: Settings,
+) -> None:
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    recall = RecallState()
+    agreeing = {"status": "success", "results": [{"status": "Operational", "n": 410}]}
+
+    await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT VALUE d FROM RE.substations AS d;",
+        ToolResult(text="ok", structured=agreeing),
+        recall=recall,
+        first_use_only=True,
+    )
+    second = await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT s.status, count(*) n FROM RE.substations s GROUP BY s.status;",
+        ToolResult(text="ok", structured=agreeing),
+        recall=recall,
+        first_use_only=True,
+    )
+
+    assert second.structured == agreeing
+
+
+async def test_a_carried_note_is_marked_suspect_when_writes_are_on(settings: Settings) -> None:
+    import json
+
+    settings = settings.model_copy(update={"memory_write_enabled": True})
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    recall = RecallState()
+
+    for structured in ({"status": "success", "results": [{"status": "Retired"}]}, _DRIFTED_RESULT):
+        await attach_statement_notes(
+            cap.client,
+            "ccid",
+            "SELECT s.status FROM RE.substations s;",
+            ToolResult(text="ok", structured=structured),
+            recall=recall,
+            first_use_only=True,
+            settings=settings,
+        )
+
+    written = [
+        json.loads(parse_qs(r.content.decode())["$row"][0])
+        for r in cap.requests
+        if "UPSERT" in parse_qs(r.content.decode())["statement"][0]
+    ]
+    assert any(row.get("suspect_since") for row in written)
+
+
+async def test_a_result_with_no_rows_leaves_carried_notes_unchecked(settings: Settings) -> None:
+    rows = [{"id": "RE.s@t0", "subject": "RE.substations", "type": "Note", "text": _DRIFT_NOTE}]
+    cap = make_capturing_cc(settings, response_json={"status": "success", "results": rows})
+    recall = RecallState()
+
+    await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT VALUE d FROM RE.substations AS d;",
+        ToolResult(text="ok", structured={"status": "success", "results": [{"status": "Retired"}]}),
+        recall=recall,
+        first_use_only=True,
+    )
+    second = await attach_statement_notes(
+        cap.client,
+        "ccid",
+        "SELECT s.status FROM RE.substations s;",
+        ToolResult(text="QUERY_ERROR: boom", structured={"errorType": "x"}, is_error=True),
+        recall=recall,
+        first_use_only=True,
+    )
+
+    assert second.structured == {"errorType": "x"}
+
+
+def test_remembering_the_same_note_twice_reports_it_once() -> None:
+    recall = RecallState()
+    row = {"id": "RE.s@t0", "subject": "RE.substations", "text": _DRIFT_NOTE}
+
+    recall.remember([row])
+    recall.remember([row])
+
+    assert recall.carried(["RE.substations"]) == [row]
+    assert recall.carried(["RE.unseen"]) == []
+
+
+def test_a_row_without_a_subject_is_not_carried() -> None:
+    recall = RecallState()
+
+    recall.remember([{"id": "orphan", "text": _DRIFT_NOTE}])
+
+    assert recall.carried([""]) == []

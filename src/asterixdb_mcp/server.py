@@ -771,6 +771,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             dataset=dataset,
             size=size,
             download_format=downloadFormat,
+            recall=recall,
         )
         return _to_call_tool_result(result)
 
