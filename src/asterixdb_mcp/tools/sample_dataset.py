@@ -21,8 +21,15 @@ from ..egress import bound_rows_for_llm
 from ..errors import ErrorType, GatewayError
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
 from ..naming import quote_identifier, resolve
+from ..staleness import render_warning
 from . import ToolResult
-from .memory_notes import HAVE_NOTES_HINT, NO_NOTES_HINT, fetch_memory_notes, render_notes
+from .memory_notes import (
+    HAVE_NOTES_HINT,
+    NO_NOTES_HINT,
+    RecallState,
+    deliver_notes,
+    render_notes,
+)
 
 DEFAULT_SIZE = 10
 MAX_SIZE = 100
@@ -38,6 +45,7 @@ async def run_sample_dataset(
     dataset: str,
     size: int = DEFAULT_SIZE,
     download_format: ArtifactFormat | None = None,
+    recall: RecallState | None = None,
 ) -> ToolResult:
     """Return up to `size` real documents from a dataset, no SQL required."""
     size = min(max(size, 1), MAX_SIZE)
@@ -78,12 +86,29 @@ async def run_sample_dataset(
         return ToolResult(text=text, structured=structured)
     # Sampling is where a model discovers value-domain gotchas: ride the learned
     # notes along, or prompt for the first write when none exist yet.
-    notes = await fetch_memory_notes(client, ccid, [f"{dv}.{ds}", dv])
+    # A sample is whole records, so a field the notes name and the rows lack is
+    # evidence of a rename — a projected query result could never show that.
+    notes, contradictions = await deliver_notes(
+        client,
+        ccid,
+        [f"{dv}.{ds}", dv],
+        result_rows=window,
+        whole_rows=True,
+        settings=settings,
+        recall=recall,
+    )
     if notes:
+        # Mark what was delivered, or the next query on this dataset repeats
+        # every note the sample already carried.
+        if recall is not None:
+            recall.mark([str(n["subject"]) for n in notes if n.get("subject")])
         structured["learnedNotes"] = notes
+        if contradictions:
+            structured["staleNotes"] = contradictions
         text += (
             "\n\nLearned notes from memory about this dataset:\n"
             + render_notes(notes)
+            + render_warning(contradictions)
             + "\n\n"
             + HAVE_NOTES_HINT
         )

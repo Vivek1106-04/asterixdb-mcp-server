@@ -26,6 +26,7 @@ session sees the doubt even if this one ignores it.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -33,6 +34,7 @@ from typing import Any
 from .claims import (
     NUMBER_WORDS,
     SEGMENT_RE,
+    STOPWORDS,
     STRING_WORDS,
     WORD_RE,
     fmt_values,
@@ -48,6 +50,8 @@ MAX_CHECKED_ROWS = 50
 MAX_CONFLICTS_PER_NOTE = 3
 MAX_REASON_LEN = 300
 MIN_FIELD_NAME_LEN = 3
+# A note only counts as field-describing once it names this many live fields.
+MIN_FIELD_MENTIONS = 2
 
 SUSPECT_LABEL = "possibly stale"
 
@@ -193,23 +197,83 @@ def _asserted_type(note: str, field: str) -> str | None:
     conversion instruction, not a type claim.
     """
     lowered = note.lower()
-    target = field.lower()
-    start = lowered.find(target)
-    while start != -1:
-        nearby = labels_near(lowered, start, start + len(target))
+    # Word-bounded: a bare "lat" also lives inside "population", and the type
+    # word beside THAT sentence has nothing to do with the field.
+    pattern = rf"(?<![a-z0-9_]){re.escape(field.lower())}(?![a-z0-9_])"
+    for match in re.finditer(pattern, lowered):
+        nearby = labels_near(lowered, match.start(), match.end())
         says_string = bool(nearby & STRING_WORDS)
         says_number = bool(nearby & NUMBER_WORDS)
         if says_string != says_number:
             return "string" if says_string else "number"
-        start = lowered.find(target, start + 1)
     return None
 
 
-def note_conflicts(note: str, rows: list[Any]) -> list[str]:
-    """Every checkable disagreement between one note and the fresh rows."""
+def renamed_fields(note: str, rows: list[Any]) -> list[str]:
+    """Descriptors of fields a note names that the rows carry under another name.
+
+    Only meaningful against whole records: in a projected result a field is
+    absent because the query did not ask for it, which says nothing about the
+    schema. Even then a bare word is not a claim, so the check runs only on
+    notes that demonstrably describe fields — ones already naming at least
+    ``MIN_FIELD_MENTIONS`` fields the rows really carry — and reports a word
+    only when a live field shares its stem, which is what a rename looks like.
+    """
+    fields = set(field_types(rows))
+    words = {w.lower() for w in WORD_RE.findall(note)}
+    live = {field.lower() for field in fields}
+    if len(words & live) < MIN_FIELD_MENTIONS:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for word in sorted(words - live - STOPWORDS):
+        renamed = _stem_match(word, fields)
+        # One line per live field: "bed" and "beds" both point at bed_count,
+        # and saying so twice adds nothing.
+        if renamed is None or renamed in seen:
+            continue
+        seen.add(renamed)
+        out.append(f"'{word}': the note names it, but the rows carry '{renamed}'")
+        if len(out) == MAX_CONFLICTS_PER_NOTE:
+            break
+    return out
+
+
+def _stem_match(word: str, fields: set[str]) -> str | None:
+    """The live field that looks like ``word`` renamed by qualification.
+
+    A rename qualifies the old name — ``beds`` becomes ``bed_count`` — so the
+    live field must begin with the old stem AND a separator. Without the
+    separator "counts" would claim ``county``, and "count" would claim
+    ``bed_count``, neither of which names the same thing.
+    """
+    stem = word.rstrip("s")
+    if len(stem) < MIN_FIELD_NAME_LEN:
+        return None
+    for field in sorted(fields):
+        if field.lower().startswith(f"{stem}_"):
+            return field
+    return None
+
+
+def note_conflicts(note: str, rows: list[Any], whole_rows: bool = False) -> list[str]:
+    """Every checkable disagreement between one note and the fresh rows.
+
+    ``whole_rows`` marks a payload of complete records (a sample), where a
+    field's absence is evidence; a projected query result carries no such
+    signal and is checked for values and types only.
+    """
     if not note.strip() or not rows:
         return []
-    return (numeric_drift(note, rows) + type_drift(note, rows))[:MAX_CONFLICTS_PER_NOTE]
+    if whole_rows:
+        # Numeric drift is meaningless here. In a whole record every string
+        # value sits beside every column, so a hospital's name would claim its
+        # own latitude as a bed count. A sample proves shapes and types; only
+        # an aggregate proves quantities.
+        found = type_drift(note, rows) + renamed_fields(note, rows)
+    else:
+        found = numeric_drift(note, rows) + type_drift(note, rows)
+    return found[:MAX_CONFLICTS_PER_NOTE]
 
 
 def flag_suspect(row: dict[str, Any], conflicts: list[str]) -> dict[str, Any]:
@@ -230,7 +294,7 @@ def is_suspect(row: dict[str, Any]) -> bool:
 
 
 def check_rows(
-    rows: list[dict[str, Any]], result_rows: list[Any]
+    rows: list[dict[str, Any]], result_rows: list[Any], whole_rows: bool = False
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Flag the note rows the fresh result contradicts.
 
@@ -240,7 +304,7 @@ def check_rows(
     flagged: list[dict[str, Any]] = []
     reported: list[str] = []
     for row in rows:
-        conflicts = note_conflicts(str(_row_note_text(row)), result_rows)
+        conflicts = note_conflicts(str(_row_note_text(row)), result_rows, whole_rows)
         if not conflicts:
             flagged.append(row)
             continue

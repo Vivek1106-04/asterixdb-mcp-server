@@ -17,6 +17,7 @@ from asterixdb_mcp.staleness import (
     is_suspect,
     note_conflicts,
     numeric_drift,
+    renamed_fields,
     render_warning,
     result_claims,
     type_drift,
@@ -223,3 +224,88 @@ def test_a_claim_naming_the_measured_field_is_compared() -> None:
     assert numeric_drift("Maricopa has 8500 beds", rows) == [
         "'maricopa': note says 8500.0, this result shows 9000.0"
     ]
+
+
+# renamed fields: only visible in a whole record
+
+
+HOSPITALS_NOTE = (
+    "hospitals dataset stores lat, lon, name, type, status ('OPEN' vs 'CLOSED'), "
+    "state, county, beds (-999 for missing)."
+)
+RENAMED_ROWS = [
+    {
+        "lat": 31.3,
+        "lon": -110.9,
+        "name": "HOLY CROSS",
+        "type": "GENERAL ACUTE CARE",
+        "status": "OPEN",
+        "state": "AZ",
+        "county": "SANTA CRUZ",
+        "bed_count": 56,
+    }
+]
+
+
+def test_a_renamed_field_is_flagged_against_a_whole_record() -> None:
+    assert note_conflicts(HOSPITALS_NOTE, RENAMED_ROWS, whole_rows=True) == [
+        "'beds': the note names it, but the rows carry 'bed_count'"
+    ]
+
+
+def test_a_projected_result_never_reports_a_missing_field() -> None:
+    # The query simply did not ask for it; absence is not evidence here.
+    assert note_conflicts(HOSPITALS_NOTE, RENAMED_ROWS) == []
+
+
+def test_prose_that_does_not_describe_fields_is_not_checked_for_renames() -> None:
+    assert renamed_fields("substations contains 433 substations all in CA.", RENAMED_ROWS) == []
+
+
+def test_a_note_whose_fields_all_still_exist_reports_nothing() -> None:
+    rows = [{"id": "a", "lon": 1.0, "lat": 2.0, "height": 3.9, "subtype": "residential"}]
+    note = "buildings has fields: id, lon, lat, height, subtype."
+
+    assert renamed_fields(note, rows) == []
+
+
+def test_an_unrelated_word_is_not_read_as_a_rename() -> None:
+    note = "hospitals stores lat, lon, name, county and serves the Phoenix metro area."
+
+    assert renamed_fields(note, RENAMED_ROWS) == []
+
+
+def test_renames_are_capped() -> None:
+    rows = [
+        {"keep_one": 1, "keep_two": 2}
+        | {f"{name}_count": i for i, name in enumerate(("widget", "gadget", "sprocket", "bracket"))}
+    ]
+    note = "names keep_one, keep_two and widgets, gadgets, sprockets, brackets"
+
+    assert len(renamed_fields(note, rows)) == MAX_CONFLICTS_PER_NOTE
+
+
+def test_a_stem_too_short_to_mean_anything_is_not_matched() -> None:
+    rows = [{"keep_one": 1, "keep_two": 2, "id_count": 3}]
+
+    assert renamed_fields("names keep_one, keep_two and ids", rows) == []
+
+
+def test_a_plural_alone_is_not_a_rename() -> None:
+    rows = [{"keep_one": 1, "keep_two": 2, "widget": 3}]
+
+    assert renamed_fields("names keep_one, keep_two and widgets", rows) == []
+
+
+def test_a_word_matching_only_the_tail_of_a_field_is_not_a_rename() -> None:
+    # "counts" is prose; bed_count is a bed count, not a count of something.
+    assert (
+        renamed_fields("hospitals stores lat, lon, county and counts by state", RENAMED_ROWS) == []
+    )
+
+
+def test_a_field_name_inside_a_longer_word_is_not_a_mention() -> None:
+    # "lat" also lives inside "population"; the type word there is unrelated.
+    note = "hospitals stores lat, lon; joining population uses a FIPS code string."
+
+    assert type_drift(note, RENAMED_ROWS) == []

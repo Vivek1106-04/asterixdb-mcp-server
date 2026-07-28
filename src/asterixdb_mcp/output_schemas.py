@@ -140,6 +140,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
     "sample_dataset": _obj(
         {
             "learnedNotes": _array_of_objects(),
+            "staleNotes": {"type": "array", "items": _STRING},
             "status": _STRING,
             "dataverse": _STRING,
             "dataset": _STRING,

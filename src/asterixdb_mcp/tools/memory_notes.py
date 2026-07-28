@@ -156,6 +156,39 @@ async def fetch_memory_notes(
     return display_notes(await fetch_note_rows(client, ccid, subjects))
 
 
+async def deliver_notes(
+    client: CCClient,
+    ccid: str,
+    subjects: list[str],
+    *,
+    result_rows: list[Any],
+    whole_rows: bool = False,
+    settings: Settings | None = None,
+    recall: RecallState | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Fetch the notes for these subjects, checked against the evidence at hand.
+
+    Every tool that delivers notes goes through here, because a note is only
+    checkable in the moment it rides out beside fresh rows. Recall is
+    first-use-only, so whichever tool touches a dataset FIRST is the one and
+    only chance to catch a contradiction for it — and that is usually a sample,
+    not a query.
+
+    Returns the notes in delivery shape and one line per contradiction found.
+    """
+    rows = await fetch_note_rows(client, ccid, subjects)
+    if not rows:
+        return [], []
+    rows, contradictions = check_rows(rows, result_rows, whole_rows)
+    if recall is not None:
+        recall.remember(rows)
+    # One write carries both the usage bump and any suspect marker, so the
+    # reinforcement cannot overwrite a flag raised a moment earlier.
+    if settings is not None and settings.memory_write_enabled:
+        await reinforce_notes(client, ccid, rows)
+    return display_notes(rows), contradictions
+
+
 def note_score(row: dict[str, Any], now: datetime) -> float:
     """Recall-utility score: evidence + usage + freshness.
 
@@ -211,14 +244,39 @@ class RecallState:
     burn the client's context window. Only subjects whose notes were actually
     DELIVERED are marked: a dataset with no notes yet stays fresh, so a note
     written later in the session still surfaces on its next query.
+
+    The delivered ROWS are kept as well, because delivery and disproof rarely
+    happen at the same moment. A model samples a dataset before it aggregates
+    it, so the note arrives with the sample while the count that contradicts it
+    arrives several turns later. Holding the rows lets that later result be
+    checked without re-reading the store or repeating the notes.
     """
 
     def __init__(self) -> None:
         self._delivered: set[str] = set()
+        self._rows: dict[str, list[dict[str, Any]]] = {}
 
     def fresh(self, subjects: list[str]) -> list[str]:
         """Subjects whose notes have not been delivered this session."""
         return [s for s in subjects if s not in self._delivered]
+
+    def remember(self, rows: list[dict[str, Any]]) -> None:
+        """Keep delivered note rows so later results can still be checked.
+
+        Keyed by row id, or a note delivered twice would report the same
+        contradiction twice.
+        """
+        for row in rows:
+            subject = str(row.get("subject") or "")
+            if not subject:
+                continue
+            kept = self._rows.setdefault(subject, [])
+            if not any(k.get("id") == row.get("id") for k in kept):
+                kept.append(row)
+
+    def carried(self, subjects: list[str]) -> list[dict[str, Any]]:
+        """Note rows already delivered for these subjects this session."""
+        return [row for subject in subjects for row in self._rows.get(subject, [])]
 
     def mark(self, subjects: list[str]) -> None:
         """Record subjects whose notes were just delivered."""
@@ -257,35 +315,57 @@ async def attach_statement_notes(
     """
     if settings is not None and not settings.memory_enabled:
         return result
-    subjects = subjects_from_statement(statement)
-    if recall is not None and first_use_only:
-        subjects = recall.fresh(subjects)
-    rows = await fetch_note_rows(client, ccid, subjects)
-    if not rows:
-        return result
-    # The rows that just came back are the only evidence the gateway will ever
-    # hold next to these notes; check them before the notes go out.
-    rows, contradictions = check_rows(rows, _result_rows(result))
-    notes = display_notes(rows)
+    touched = subjects_from_statement(statement)
+    subjects = recall.fresh(touched) if (recall is not None and first_use_only) else touched
+    rows = _result_rows(result)
+    notes, contradictions = await deliver_notes(
+        client, ccid, subjects, result_rows=rows, settings=settings, recall=recall
+    )
     if recall is not None:
         recall.mark([str(n["subject"]) for n in notes if n.get("subject")])
-    # One write carries both the usage bump and any suspect marker, so the
-    # reinforcement cannot overwrite a flag raised a moment earlier.
-    if settings is not None and settings.memory_write_enabled:
-        await reinforce_notes(client, ccid, rows)
+        contradictions += await _recheck_carried(client, ccid, recall, touched, rows, settings)
+    if not notes and not contradictions:
+        return result
     structured = result.structured
     if structured is not None:
-        structured = {**structured, "learnedNotes": notes}
+        structured = {**structured, "learnedNotes": notes} if notes else dict(structured)
         if contradictions:
             structured["staleNotes"] = contradictions
+    delivered = (
+        "\n\nLearned notes from memory about the referenced datasets:\n" + render_notes(notes)
+        if notes
+        else ""
+    )
     return ToolResult(
-        text=result.text
-        + "\n\nLearned notes from memory about the referenced datasets:\n"
-        + render_notes(notes)
-        + render_warning(contradictions),
+        text=result.text + delivered + render_warning(contradictions),
         structured=structured,
         is_error=result.is_error,
     )
+
+
+async def _recheck_carried(
+    client: CCClient,
+    ccid: str,
+    recall: RecallState,
+    subjects: list[str],
+    result_rows: list[Any],
+    settings: Settings | None,
+) -> list[str]:
+    """Check this result against notes delivered EARLIER in the session.
+
+    Recall fires once per dataset, and it usually fires on the sample the model
+    takes before it writes anything. The aggregate that can actually disprove a
+    stored count lands turns later, with no notes attached — so without this the
+    contradiction the whole check exists for is never seen. The notes are not
+    repeated; only the disagreement is raised.
+    """
+    carried = recall.carried([s for s in subjects if s not in recall.fresh(subjects)])
+    if not carried or not result_rows:
+        return []
+    flagged, contradictions = check_rows(carried, result_rows)
+    if contradictions and settings is not None and settings.memory_write_enabled:
+        await reinforce_notes(client, ccid, flagged)
+    return contradictions
 
 
 def _result_rows(result: ToolResult) -> list[Any]:

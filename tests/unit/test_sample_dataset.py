@@ -178,3 +178,87 @@ async def test_sample_without_notes_prompts_first_write(settings: Settings) -> N
     assert "learnedNotes" not in result.structured
     assert "No learned notes exist for Yelp.Business" in result.text
     assert "memory_write" in result.text
+
+
+async def test_a_sample_catches_the_rename_a_query_could_not(settings: Settings) -> None:
+    """The first tool to touch a dataset is the only one that can catch it.
+
+    Recall is first-use-only and this model samples before it queries, so a
+    contradiction missed here is never checked again in the session.
+    """
+    note_rows = [
+        {
+            "id": "Yelp.Business@t0",
+            "subject": "Yelp.Business",
+            "type": "Note",
+            "text": "Business stores name, city, state and stars (0 when unrated).",
+        }
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        if "Metadata" in stmt:
+            rows: Any = _INVENTORY
+        elif "AgentMemory" in stmt:
+            rows = note_rows
+        else:
+            rows = [{"name": "Joe's", "city": "Tempe", "state": "AZ", "star_rating": 4}]
+        return json_response({"status": "success", "results": rows})
+
+    cap = make_capturing_cc(settings, handler=handler)
+
+    result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
+
+    assert result.structured["staleNotes"] == [
+        "- [Yelp.Business] 'stars': the note names it, but the rows carry 'star_rating'"
+    ]
+    assert "STALE NOTE CHECK" in result.text
+    assert result.structured["learnedNotes"][0]["suspect"] is True
+
+
+async def test_a_sample_that_agrees_with_its_notes_carries_no_warning(settings: Settings) -> None:
+    note_rows = [{"subject": "Yelp.Business", "type": "Note", "text": "split categories"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        if "Metadata" in stmt:
+            rows: Any = _INVENTORY
+        elif "AgentMemory" in stmt:
+            rows = note_rows
+        else:
+            rows = [{"business_id": "x"}]
+        return json_response({"status": "success", "results": rows})
+
+    cap = make_capturing_cc(settings, handler=handler)
+
+    result = await run_sample_dataset(cap.client, settings, dataverse="Yelp", dataset="Business")
+
+    assert "staleNotes" not in result.structured
+    assert "STALE NOTE CHECK" not in result.text
+
+
+async def test_a_sample_marks_its_subjects_so_the_next_query_does_not_repeat_them(
+    settings: Settings,
+) -> None:
+    from asterixdb_mcp.tools.memory_notes import RecallState
+
+    note_rows = [{"subject": "Yelp.Business", "type": "Note", "text": "split categories"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        if "Metadata" in stmt:
+            rows: Any = _INVENTORY
+        elif "AgentMemory" in stmt:
+            rows = note_rows
+        else:
+            rows = [{"business_id": "x"}]
+        return json_response({"status": "success", "results": rows})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    recall = RecallState()
+
+    await run_sample_dataset(
+        cap.client, settings, dataverse="Yelp", dataset="Business", recall=recall
+    )
+
+    assert recall.fresh(["Yelp.Business"]) == []
