@@ -32,7 +32,9 @@ from typing import Any
 
 from .claims import (
     NUMBER_WORDS,
+    SEGMENT_RE,
     STRING_WORDS,
+    WORD_RE,
     fmt_values,
     labels_near,
     normalize_number,
@@ -129,10 +131,13 @@ def numeric_drift(note: str, rows: list[Any]) -> list[str]:
     if not stored:
         return []
     fresh = result_claims(rows)
+    measures = _measure_tokens(rows)
     out: list[str] = []
     for label, stored_values in sorted(stored.items()):
         fresh_values = fresh.get(label)
         if fresh_values is None or not values_conflict(fresh_values, stored_values):
+            continue
+        if not _measures_the_same_thing(note, label, measures):
             continue
         out.append(
             f"'{label}': note says {fmt_values(stored_values)}, "
@@ -141,6 +146,30 @@ def numeric_drift(note: str, rows: list[Any]) -> list[str]:
         if len(out) == MAX_CONFLICTS_PER_NOTE:
             break
     return out
+
+
+def _measure_tokens(rows: list[Any]) -> set[str]:
+    """What the result measured: the words making up its field names."""
+    tokens: set[str] = set()
+    for field in field_types(rows):
+        tokens |= {part for part in field.lower().split("_") if len(part) >= MIN_FIELD_NAME_LEN}
+    return tokens
+
+
+def _measures_the_same_thing(note: str, label: str, measures: set[str]) -> bool:
+    """True when the note claims its number about the quantity the result reports.
+
+    A category word alone is not enough: a note reading "Heat ... max 150
+    deaths" and a row reading ``{"EVENT_TYPE": "Heat", "DAMAGE_PROPERTY": 0}``
+    share the category and nothing else, and calling that a contradiction
+    compares deaths against dollars. The claim must sit in a clause that also
+    names one of the fields the result actually returned.
+    """
+    for segment in SEGMENT_RE.split(note):
+        words = {w.lower() for w in WORD_RE.findall(segment)}
+        if label in words and (words & measures) - {label}:
+            return True
+    return False
 
 
 def type_drift(note: str, rows: list[Any]) -> list[str]:

@@ -131,7 +131,7 @@ def test_blank_note_or_empty_result_is_never_checked() -> None:
 
 def test_reported_conflicts_are_capped() -> None:
     categories = ["alpha", "bravo", "charlie", "delta", "echo"]
-    note = "; ".join(f"{name} totals {i}" for i, name in enumerate(categories))
+    note = "; ".join(f"{name} total {i}" for i, name in enumerate(categories))
     rows = [{"label": name, "total": 100 + i} for i, name in enumerate(categories)]
 
     assert len(note_conflicts(note, rows)) == MAX_CONFLICTS_PER_NOTE
@@ -206,3 +206,20 @@ def test_warning_names_the_disagreement_and_how_to_fix_it() -> None:
 
 def test_no_warning_without_a_contradiction() -> None:
     assert render_warning([]) == ""
+
+
+def test_a_shared_category_is_not_enough_without_a_shared_measure() -> None:
+    # The note's 150 is deaths; the row's number is dollars. Same category word,
+    # different quantities — observed as a false positive against live data.
+    note = "Deadliest events are dominated by Heat in Arizona (max 150 deaths in Phoenix)."
+    rows = [{"EVENT_TYPE": "Heat", "DAMAGE_PROPERTY": 0.0}]
+
+    assert numeric_drift(note, rows) == []
+
+
+def test_a_claim_naming_the_measured_field_is_compared() -> None:
+    rows = [{"county": "Maricopa", "beds": 9000}]
+
+    assert numeric_drift("Maricopa has 8500 beds", rows) == [
+        "'maricopa': note says 8500.0, this result shows 9000.0"
+    ]
