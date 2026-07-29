@@ -68,6 +68,27 @@ def test_advertised_protocol_version_matches_the_installed_sdk() -> None:
     assert MCP_PROTOCOL_VERSION == types.LATEST_PROTOCOL_VERSION
 
 
+def test_advertised_protocol_version_is_the_modern_era_ceiling() -> None:
+    """What we advertise is the highest revision, not what every client is given.
+
+    The SDK serves two eras: a classic ``initialize`` handshake and a modern one.
+    A client on the handshake path is answered with the older revision, so probing
+    with ``initialize`` and seeing something other than this constant is correct
+    behaviour. Pinning the relationship here keeps the docs honest about which of
+    the two numbers this is.
+    """
+    from mcp.server.runner import (
+        HANDSHAKE_PROTOCOL_VERSIONS,
+        LATEST_MODERN_VERSION,
+    )
+
+    assert MCP_PROTOCOL_VERSION == LATEST_MODERN_VERSION
+    assert MCP_PROTOCOL_VERSION not in HANDSHAKE_PROTOCOL_VERSIONS, (
+        "the advertised revision is now also a handshake revision - the two-era "
+        "distinction this documents has collapsed, so revisit the README wording."
+    )
+
+
 def test_version_resource_reports_both_versions() -> None:
     """The gateway block of ``asterixdb://version`` is what clients read to
     identify the build, so it carries the same two values as ``serverInfo``."""
