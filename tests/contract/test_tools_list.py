@@ -6,6 +6,9 @@ functional design so accidental drift in names or schemas is caught in CI.
 
 from __future__ import annotations
 
+import json
+import re
+
 import httpx
 import pytest
 from mcp import types
@@ -247,3 +250,47 @@ async def test_advertises_power_prompts(server) -> None:
 async def test_advertises_analyze_dataverse_prompt(server) -> None:
     prompts = {p.name for p in await server.list_prompts()}
     assert "analyze_dataverse" in prompts
+
+
+# --- prompt-cache stability -------------------------------------------------
+#
+# The tools block is the first thing in every request and is re-sent on every
+# turn - measured at ~12.9k tokens across 29 tools. Clients that cache
+# explicitly (Anthropic's cache_control) only get that discount while the block
+# is byte-identical between requests. A timestamp, uuid, or dict-ordered field
+# slipped into any description silently costs every such client ~10x on input,
+# and nothing errors. These tests are the only thing that would notice.
+
+
+def _serialize(tools: list[types.Tool]) -> str:
+    """Serialize exactly as the wire does: declared order, model field order."""
+    return json.dumps([t.model_dump(mode="json", exclude_none=True) for t in tools])
+
+
+async def test_tools_block_is_byte_identical_across_builds() -> None:
+    # Arrange: two servers built independently, same settings
+    settings = Settings(cc_base_url="http://test-cc:19002")
+
+    # Act
+    first = _serialize(await build_server(settings).list_tools())
+    second = _serialize(await build_server(settings).list_tools())
+
+    # Assert
+    assert first == second, (
+        "tools/list is not deterministic between builds - prompt caching is "
+        "defeated for every client that caches explicitly."
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "pattern"),
+    [
+        ("ISO timestamp", r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"),
+        ("uuid", r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+        ("object address", r"0x[0-9a-f]{8,}"),
+    ],
+)
+async def test_tools_block_carries_no_volatile_content(server, label, pattern) -> None:
+    """Determinism within one process can still hide content that varies per run."""
+    blob = _serialize(await server.list_tools())
+    assert not re.search(pattern, blob), f"tool schemas contain a per-run {label}"
