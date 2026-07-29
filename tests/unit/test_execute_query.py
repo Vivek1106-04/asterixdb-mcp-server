@@ -348,3 +348,31 @@ async def test_non_syntax_error_carries_no_reference_hint(settings: Settings) ->
     result = await run_execute_query(cap.client, settings, statement="DELETE FROM x;")
 
     assert "get_reference" not in result.structured["errorMessage"]
+
+
+async def test_bare_collection_query_carries_notes_via_the_dataverse_argument(
+    settings: Settings,
+) -> None:
+    """A model that passes dataverse= and writes `FROM substations` still gets its
+    notes. Before the subject extractor understood bare names these statements
+    carried nothing, so their notes were never checked against the rows either."""
+    from urllib.parse import parse_qs
+
+    note_rows = [{"subject": "real_estate.substations", "type": "Note", "text": "410 operational"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stmt = parse_qs(request.content.decode())["statement"][0]
+        return json_response(
+            {"status": "success", "results": note_rows if "AgentMemory" in stmt else []}
+        )
+
+    cap = make_capturing_cc(settings, handler=handler)
+
+    result = await run_execute_query(
+        cap.client,
+        settings,
+        statement="SELECT COUNT(*) FROM substations s;",
+        dataverse="real_estate",
+    )
+
+    assert result.structured["learnedNotes"][0]["note"] == "410 operational"

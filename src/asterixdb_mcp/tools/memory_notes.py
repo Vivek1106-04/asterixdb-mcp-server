@@ -62,6 +62,22 @@ _FROM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The same clauses with an unqualified name. A model that has issued `USE dv`
+# writes `FROM substations s`, which _FROM_RE cannot see. The trailing lookahead
+# drops anything followed by a dot - that is the qualified form, already matched
+# above, or an alias.field path. It also bars a following identifier character,
+# without which the group would simply backtrack to a shorter name to dodge the
+# dot and yield `other_d` out of `other_dv.hospitals`. A leading `(` or `[`
+# never matches, so subqueries and array literals stay out.
+_BARE_FROM_RE = re.compile(
+    r"\b(?:from|join|unnest)\s+`?([A-Za-z_][A-Za-z0-9_]*)`?(?![A-Za-z0-9_`]|\s*\.)",
+    re.IGNORECASE,
+)
+
+# The dataverse a statement selected for itself, which outranks any default the
+# caller supplies.
+_USE_RE = re.compile(r"\buse\s+`?([A-Za-z_][A-Za-z0-9_]*)`?", re.IGNORECASE)
+
 
 async def fetch_note_rows(client: CCClient, ccid: str, subjects: list[str]) -> list[dict[str, Any]]:
     """Current note-bearing memory rows for the given subjects, ranked by score.
@@ -283,16 +299,34 @@ class RecallState:
         self._delivered.update(subjects)
 
 
-def subjects_from_statement(statement: str) -> list[str]:
-    """Extract candidate concept subjects (dataverse.dataset) from a SQL++ statement."""
+def subjects_from_statement(statement: str, dataverse: str | None = None) -> list[str]:
+    """Extract candidate concept subjects (dataverse.dataset) from a SQL++ statement.
+
+    Unqualified collection names are resolved against the statement's own ``USE``
+    clause, falling back to ``dataverse`` (the tool argument the caller ran the
+    query under). With neither, a bare name is dropped rather than guessed at:
+    the wrong dataverse would attach another dataset's notes to this statement.
+    """
     subjects: list[str] = []
-    for dataverse, dataset in _FROM_RE.findall(statement):
-        if dataverse == "Metadata":
-            continue
-        subject = f"{dataverse}.{dataset}"
-        if subject not in subjects:
-            subjects.append(subject)
+    for qualifier, dataset in _FROM_RE.findall(statement):
+        _add_subject(subjects, qualifier, dataset)
+
+    use_match = _USE_RE.search(statement)
+    default = use_match.group(1) if use_match else dataverse
+    if default is None:
+        return subjects
+    for dataset in _BARE_FROM_RE.findall(statement):
+        _add_subject(subjects, default, dataset)
     return subjects
+
+
+def _add_subject(subjects: list[str], dataverse: str, dataset: str) -> None:
+    """Append ``dataverse.dataset`` unless it is Metadata or already present."""
+    if dataverse == "Metadata":
+        return
+    subject = f"{dataverse}.{dataset}"
+    if subject not in subjects:
+        subjects.append(subject)
 
 
 async def attach_statement_notes(
@@ -303,6 +337,7 @@ async def attach_statement_notes(
     recall: RecallState | None = None,
     first_use_only: bool = False,
     settings: Settings | None = None,
+    dataverse: str | None = None,
 ) -> ToolResult:
     """Append learned notes for the statement's datasets to a tool result.
 
@@ -315,7 +350,7 @@ async def attach_statement_notes(
     """
     if settings is not None and not settings.memory_enabled:
         return result
-    touched = subjects_from_statement(statement)
+    touched = subjects_from_statement(statement, dataverse)
     subjects = recall.fresh(touched) if (recall is not None and first_use_only) else touched
     rows = _result_rows(result)
     notes, contradictions = await deliver_notes(

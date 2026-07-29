@@ -105,6 +105,7 @@ async def run_execute_query(
             ToolResult.error(_with_reference_hint(err)),
             recall=recall,
             settings=settings,
+            dataverse=dataverse,
         )
 
     rows = envelope.get("results") or []
@@ -164,6 +165,7 @@ async def run_execute_query(
         recall=recall,
         first_use_only=True,
         settings=settings,
+        dataverse=dataverse,
     )
 
 
