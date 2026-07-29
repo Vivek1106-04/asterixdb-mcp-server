@@ -108,40 +108,70 @@ def test_main_runs_startup_maintenance_before_serving(
 # _client_identity (handshake provenance)
 
 
-def _fake_mcp(client_params: object) -> object:
+def _ctx_with_client(name: str, version: str = "") -> object:
+    """A per-call Context stand-in carrying a REAL handshake params model.
+
+    Only the connection wrapper is faked. ``client_params`` is the SDK's own
+    ``InitializeRequestParams`` on purpose: it is the object whose field names the
+    identity lookup depends on, and a hand-rolled namespace would keep passing
+    after the SDK renamed that field, which is exactly how this broke once.
+    """
     from types import SimpleNamespace
 
-    ctx = SimpleNamespace(session=SimpleNamespace(client_params=client_params))
-    return SimpleNamespace(get_context=lambda: ctx)
+    from mcp import types
+
+    params = types.InitializeRequestParams(
+        protocolVersion=types.LATEST_PROTOCOL_VERSION,
+        capabilities=types.ClientCapabilities(),
+        clientInfo=types.Implementation(name=name, version=version),
+    )
+    return SimpleNamespace(session=SimpleNamespace(client_params=params))
 
 
 def test_client_identity_reads_handshake_info() -> None:
-    from types import SimpleNamespace
     from typing import Any, cast
 
     from asterixdb_mcp.server import _client_identity
 
-    info = SimpleNamespace(name="claude-desktop", version="1.2")
-    fake = cast(Any, _fake_mcp(SimpleNamespace(clientInfo=info)))
-    assert _client_identity(fake) == "claude-desktop/1.2"
+    ctx = cast(Any, _ctx_with_client("claude-desktop", "1.2"))
+    assert _client_identity(ctx) == "claude-desktop/1.2"
 
 
 def test_client_identity_handles_missing_pieces() -> None:
+    from typing import Any, cast
+
+    from asterixdb_mcp.server import _client_identity
+
+    # No version: name alone. Blank name: None.
+    assert _client_identity(cast(Any, _ctx_with_client("antigravity"))) == "antigravity"
+    assert _client_identity(cast(Any, _ctx_with_client("  ", "1"))) is None
+
+
+def test_client_identity_is_none_when_the_handshake_carried_no_client_info() -> None:
+    """Absent client info yields no provenance rather than a partial identity.
+
+    Built from a plain namespace, not the SDK params model: the 2.x model makes
+    ``clientInfo`` required, so it cannot express this case at all. The guard stays
+    because ``client_params`` is only as trustworthy as the peer that filled it.
+    """
     from types import SimpleNamespace
     from typing import Any, cast
 
     from asterixdb_mcp.server import _client_identity
 
-    # No version: name alone. No clientInfo / blank name / no context: None.
-    named_only = SimpleNamespace(name="antigravity", version="")
-    fake = cast(Any, _fake_mcp(SimpleNamespace(clientInfo=named_only)))
-    assert _client_identity(fake) == "antigravity"
-    assert _client_identity(cast(Any, _fake_mcp(SimpleNamespace(clientInfo=None)))) is None
-    blank = SimpleNamespace(name="  ", version="1")
-    assert _client_identity(cast(Any, _fake_mcp(SimpleNamespace(clientInfo=blank)))) is None
+    ctx = SimpleNamespace(session=SimpleNamespace(client_params=SimpleNamespace()))
+    assert _client_identity(cast(Any, ctx)) is None
 
-    def boom() -> object:
-        raise ValueError("no active request context")
 
-    outside = SimpleNamespace(get_context=boom)
-    assert _client_identity(cast(Any, outside)) is None
+def test_client_identity_is_none_outside_a_request() -> None:
+    """A Context with no live request raises on ``.session``; provenance is additive."""
+    from typing import Any, cast
+
+    from asterixdb_mcp.server import _client_identity
+
+    class Detached:
+        @property
+        def session(self) -> object:
+            raise LookupError("no active request context")
+
+    assert _client_identity(cast(Any, Detached())) is None

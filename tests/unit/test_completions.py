@@ -23,7 +23,7 @@ def test_empty_partial_returns_all_sorted() -> None:
     out = rank_completions(["Beta", "alpha", "Gamma"], "")
     assert out.values == ["Beta", "Gamma", "alpha"]
     assert out.total == 3
-    assert out.hasMore is False
+    assert out.has_more is False
 
 
 def test_ranks_exact_over_prefix_over_substring() -> None:
@@ -53,13 +53,13 @@ def test_caps_values_and_flags_has_more() -> None:
     out = rank_completions(candidates, "")
     assert len(out.values) == MAX_COMPLETION_VALUES
     assert out.total == MAX_COMPLETION_VALUES + 5
-    assert out.hasMore is True
+    assert out.has_more is True
 
 
 def test_no_match_returns_empty() -> None:
     out = rank_completions(["alpha", "beta"], "zzz")
     assert out.values == []
-    assert out.hasMore is False
+    assert out.has_more is False
 
 
 # --- guarded async resolution ----------------------------------------------

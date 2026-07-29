@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from asterixdb_mcp.output_schemas import OUTPUT_SCHEMAS, apply_output_schemas
 
@@ -60,8 +60,8 @@ def test_required_fields_are_declared_properties() -> None:
 
 
 def test_apply_raises_on_unknown_tool() -> None:
-    # A FastMCP with no tools registered: every schema name is unknown.
-    empty = FastMCP("empty")
+    # A server with no tools registered: every schema name is unknown.
+    empty = MCPServer("empty")
     with pytest.raises(KeyError):
         apply_output_schemas(empty)
 

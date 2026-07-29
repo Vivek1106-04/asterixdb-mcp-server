@@ -18,6 +18,10 @@ from asterixdb_mcp.server import build_server
 
 pytestmark = pytest.mark.anyio
 
+# Completion handlers register against the MCP method name rather than a request
+# type, so this is the key the low-level server files them under.
+COMPLETION_METHOD = "completion/complete"
+
 
 @pytest.fixture
 def server() -> object:
@@ -33,18 +37,16 @@ async def test_completion_handler_completes_dataverse_argument() -> None:
     settings = Settings(cc_base_url="http://test-cc:19002")
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     server = build_server(settings, http=http)
-    low = server._mcp_server
-    assert types.CompleteRequest in low.request_handlers
+    low = server._lowlevel_server
+    complete = low.get_request_handler(COMPLETION_METHOD)
+    assert complete is not None, "no completion/complete handler registered"
 
-    request = types.CompleteRequest(
-        method="completion/complete",
-        params=types.CompleteRequestParams(
-            ref=types.PromptReference(type="ref/prompt", name="analyze_dataverse"),
-            argument=types.CompletionArgument(name="dataverse", value="s"),
-        ),
+    params = types.CompleteRequestParams(
+        ref=types.PromptReference(type="ref/prompt", name="analyze_dataverse"),
+        argument=types.CompletionArgument(name="dataverse", value="s"),
     )
-    result = await low.request_handlers[types.CompleteRequest](request)
-    assert set(result.root.completion.values) == {"Sales", "Shop"}
+    result = await complete.handler(None, params)
+    assert set(result.completion.values) == {"Sales", "Shop"}
 
 
 async def test_advertises_exactly_the_expected_tools(server) -> None:
@@ -90,7 +92,7 @@ async def test_every_tool_advertises_behavioral_annotations(server) -> None:
     for tool in tools:
         assert tool.annotations is not None, tool.name
         assert tool.annotations.title, tool.name
-        assert tool.annotations.destructiveHint is False, tool.name
+        assert tool.annotations.destructive_hint is False, tool.name
 
 
 async def test_read_only_tools_are_marked_read_only(server) -> None:
@@ -100,25 +102,25 @@ async def test_read_only_tools_are_marked_read_only(server) -> None:
     # read-only.
     for name, tool in tools.items():
         expected = name not in ("cancel_query", "memory_write", "remember_preference")
-        assert tool.annotations.readOnlyHint is expected, name
+        assert tool.annotations.read_only_hint is expected, name
 
 
 async def test_open_world_and_idempotency_hints(server) -> None:
     tools = {t.name: t for t in await server.list_tools()}
     # get_reference reads in-gateway static docs; it is the only closed-world tool.
-    assert tools["get_reference"].annotations.openWorldHint is False
-    assert tools["execute_query"].annotations.openWorldHint is True
+    assert tools["get_reference"].annotations.open_world_hint is False
+    assert tools["execute_query"].annotations.open_world_hint is True
     # Each submit allocates a fresh async handle, so it is not idempotent.
-    assert tools["submit_async_query"].annotations.idempotentHint is False
-    assert tools["execute_query"].annotations.idempotentHint is True
+    assert tools["submit_async_query"].annotations.idempotent_hint is False
+    assert tools["execute_query"].annotations.idempotent_hint is True
 
 
 async def test_every_tool_advertises_an_output_schema(server) -> None:
     # High-end clients read outputSchema to anticipate result shape and chain calls.
     tools = await server.list_tools()
     for tool in tools:
-        assert tool.outputSchema is not None, tool.name
-        assert tool.outputSchema["type"] == "object", tool.name
+        assert tool.output_schema is not None, tool.name
+        assert tool.output_schema["type"] == "object", tool.name
 
 
 async def test_output_schema_is_advertised_not_enforced_on_errors() -> None:
@@ -134,14 +136,14 @@ async def test_output_schema_is_advertised_not_enforced_on_errors() -> None:
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     server = build_server(settings, http=http)
     result = await server.call_tool("get_schema", {"dataverse": "D", "dataset": "X"})
-    assert result.isError is True
-    assert result.structuredContent is None
+    assert result.is_error is True
+    assert result.structured_content is None
     assert result.content[0].text.split(":")[0].isupper()
 
 
 async def test_execute_query_schema_requires_statement_and_hides_readonly(server) -> None:
     tools = {t.name: t for t in await server.list_tools()}
-    schema = tools["execute_query"].inputSchema
+    schema = tools["execute_query"].input_schema
     props = schema["properties"]
     # statement is required; the egress-controlled params are NOT client-settable.
     assert "statement" in schema["required"]
@@ -171,7 +173,7 @@ async def test_advertises_expected_resources(server) -> None:
 
 
 async def test_advertises_resource_templates(server) -> None:
-    templates = {t.uriTemplate for t in await server.list_resource_templates()}
+    templates = {t.uri_template for t in await server.list_resource_templates()}
     assert templates == {
         "asterixdb://schema/{dataverse}/{dataset}",
         "asterixdb://dataverse/{dataverse}",
@@ -192,20 +194,19 @@ async def test_resource_template_completion_resolves_dataset_argument() -> None:
     settings = Settings(cc_base_url="http://test-cc:19002")
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=settings.cc_base_url)
     server = build_server(settings, http=http)
-    low = server._mcp_server
+    low = server._lowlevel_server
 
-    request = types.CompleteRequest(
-        method="completion/complete",
-        params=types.CompleteRequestParams(
-            ref=types.ResourceTemplateReference(
-                type="ref/resource", uri="asterixdb://schema/{dataverse}/{dataset}"
-            ),
-            argument=types.CompletionArgument(name="dataset", value="ord"),
-            context=types.CompletionContext(arguments={"dataverse": "Sales"}),
+    params = types.CompleteRequestParams(
+        ref=types.ResourceTemplateReference(
+            type="ref/resource", uri="asterixdb://schema/{dataverse}/{dataset}"
         ),
+        argument=types.CompletionArgument(name="dataset", value="ord"),
+        context=types.CompletionContext(arguments={"dataverse": "Sales"}),
     )
-    result = await low.request_handlers[types.CompleteRequest](request)
-    assert result.root.completion.values == ["Orders"]
+    complete = low.get_request_handler(COMPLETION_METHOD)
+    assert complete is not None
+    result = await complete.handler(None, params)
+    assert result.completion.values == ["Orders"]
 
 
 async def test_each_resource_template_reads_through_the_server() -> None:
@@ -263,8 +264,14 @@ async def test_advertises_analyze_dataverse_prompt(server) -> None:
 
 
 def _serialize(tools: list[types.Tool]) -> str:
-    """Serialize exactly as the wire does: declared order, model field order."""
-    return json.dumps([t.model_dump(mode="json", exclude_none=True) for t in tools])
+    """Serialize exactly as the wire does: declared order, model field order.
+
+    ``by_alias`` is the load-bearing argument. The model fields are snake_case in
+    Python but serialize to camelCase (``inputSchema``, ``readOnlyHint``) on the
+    wire; dumping without it would silently measure a byte string no client ever
+    receives, and the cache-stability guarantee below would be about nothing.
+    """
+    return json.dumps([t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools])
 
 
 async def test_tools_block_is_byte_identical_across_builds() -> None:

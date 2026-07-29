@@ -1,4 +1,4 @@
-"""FastMCP server: binds the tool/resource/prompt surface to MCP.
+"""MCP server: binds the tool/resource/prompt surface to MCP.
 
 All AsterixDB-facing logic lives in the tools, resources and prompts packages as
 SDK-agnostic run_* functions. This module is the thin adapter: it owns the httpx
@@ -18,7 +18,8 @@ from typing import Annotated, Any, Literal, Protocol, cast
 
 import httpx
 from mcp import types
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from pydantic import Field
 
 from . import __version__
@@ -27,7 +28,7 @@ from .cc_client import CCClient
 from .completions import complete_argument
 from .config import Settings, load_settings
 from .errors import GatewayError
-from .http_security import build_auth, build_transport_security, validate_http_security
+from .http_security import build_auth, validate_http_security
 from .output_schemas import apply_output_schemas
 from .permits import PermitPools
 from .prompts.analyze_dataverse import run_analyze_dataverse
@@ -456,7 +457,7 @@ PROFILE_QUERY_DESCRIPTION = (
 )
 
 
-# The FastMCP.completion() decorator ships unannotated, so mypy flags every
+# The MCPServer.completion() decorator ships unannotated, so mypy flags every
 # handler it wraps as untyped. The handler IS fully typed; the gap is in the SDK.
 # A narrow Protocol describes the typed shape of completion() and a cast applies
 # it at the single registration site, keeping the boundary honest without a blanket
@@ -472,7 +473,7 @@ _CompletionHandler = Callable[
 
 
 class _SupportsCompletion(Protocol):
-    """The typed slice of FastMCP we rely on for completion registration."""
+    """The typed slice of MCPServer we rely on for completion registration."""
 
     def completion(self) -> Callable[[_CompletionHandler], _CompletionHandler]: ...
 
@@ -530,13 +531,13 @@ def _to_call_tool_result(result: ToolResult) -> types.CallToolResult:
     if result.is_error:
         return types.CallToolResult(
             content=[types.TextContent(type="text", text=result.text)],
-            structuredContent=None,
-            isError=True,
+            structured_content=None,
+            is_error=True,
         )
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=_text_with_payload(result))],
-        structuredContent=result.structured,
-        isError=False,
+        structured_content=result.structured,
+        is_error=False,
     )
 
 
@@ -555,18 +556,27 @@ def _text_with_payload(result: ToolResult) -> str:
     return f"{result.text}\n\n```json\n{payload}\n```"
 
 
-def _client_identity(mcp: FastMCP) -> str | None:
+def _client_identity(ctx: Context) -> str | None:
     """Best-effort "name/version" of the connected MCP client, from the handshake.
 
     Used purely as provenance on memory rows and session events. Outside a
     request context (or with a client that sent no clientInfo) there is no
     identity — provenance is additive, so None is always acceptable.
+
+    The context is injected per call rather than read off the server: the 2.x SDK
+    has no ambient ``get_context()``, and a request-scoped handle is the more
+    honest shape anyway — identity belongs to the call, not to the process.
+
+    ``client_info`` is the Python field name; the wire spells it ``clientInfo``.
+    Reading it by the wire spelling silently yields None on every call, which is
+    indistinguishable from an anonymous client — so this lookup is asserted
+    against the SDK's real params model, not a stand-in.
     """
     try:
-        params = mcp.get_context().session.client_params
+        params = ctx.session.client_params
     except Exception:
         return None
-    info = getattr(params, "clientInfo", None)
+    info = getattr(params, "client_info", None)
     if info is None:
         return None
     name = str(getattr(info, "name", "") or "").strip()
@@ -580,14 +590,14 @@ def _client_identity(mcp: FastMCP) -> str | None:
 MAX_CLIENT_IDENTITY_LEN = 80
 
 
-def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> FastMCP:
-    """Construct the FastMCP app and register the tool/resource/prompt surface.
+def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> MCPServer:
+    """Construct the MCP app and register the tool/resource/prompt surface.
 
     Args:
         settings: Loaded gateway settings.
         http: Optional injected httpx client (tests pass a MockTransport-backed
             client). When omitted, a client is created and disposed by the
-            FastMCP lifespan bound to the cluster base URL.
+            server lifespan bound to the cluster base URL.
     """
     holder = _ClientHolder(
         settings=settings,
@@ -599,27 +609,26 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
     briefing = BriefingState()
     pools = PermitPools.from_settings(settings)
 
-    # Host/port/path are read by the Streamable HTTP transport (transport='http');
-    # they are inert under stdio. For http we also fail fast on an unsafe config,
-    # enable DNS-rebinding protection, and wire oauth resource-server auth.
-    mcp_kwargs: dict[str, Any] = {
-        "host": settings.http_host,
-        "port": settings.http_port,
-        "streamable_http_path": settings.http_path,
-    }
+    # Host/port/path and DNS-rebinding protection are transport concerns in the 2.x
+    # SDK: they are arguments to streamable_http_app(), applied in build_http_app,
+    # not constructor settings. What stays here is the config gate and oauth
+    # resource-server auth, which the server itself owns.
+    mcp_kwargs: dict[str, Any] = {}
     if settings.transport == "http":
         validate_http_security(settings)
-        mcp_kwargs["transport_security"] = build_transport_security(settings)
         auth, token_verifier = build_auth(settings)
         if auth is not None:
             mcp_kwargs["auth"] = auth
             mcp_kwargs["token_verifier"] = token_verifier
     instructions = SERVER_INSTRUCTIONS if settings.memory_enabled else SERVER_INSTRUCTIONS_NO_MEMORY
-    mcp = FastMCP("asterixdb-mcp-server", instructions=instructions, **mcp_kwargs)
-    # FastMCP takes no version argument and never forwards one, so the low-level
-    # server falls back to pkg_version("mcp") and reports the SDK's version as
-    # ours in serverInfo. Clients use that field to tell gateway builds apart.
-    mcp._mcp_server.version = __version__
+    # version reaches serverInfo directly; clients read it to tell gateway builds
+    # apart. The 1.x SDK had no such argument and leaked its own version there.
+    mcp = MCPServer(
+        "asterixdb-mcp-server",
+        instructions=instructions,
+        version=__version__,
+        **mcp_kwargs,
+    )
 
     def _client() -> CCClient:
         return holder.get()
@@ -632,6 +641,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         annotations=TOOL_ANNOTATIONS["execute_query"],
     )
     async def execute_query(
+        ctx: Context,
         statement: Annotated[str, Field(description="Pure SQL++ statement, no SET prefix.")],
         dataverse: Annotated[
             str | None, Field(description="Default Dataverse for unqualified names.")
@@ -697,7 +707,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             capture,
             statement=statement,
             result_error=capture_error_signal(result),
-            client_name=_client_identity(mcp),
+            client_name=_client_identity(ctx),
             metrics=(result.structured or {}).get("metrics"),
         )
         return _to_call_tool_result(result)
@@ -814,6 +824,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         annotations=TOOL_ANNOTATIONS["wait_on_async_query"],
     )
     async def wait_on_async_query(
+        ctx: Context,
         clientContextID: Annotated[
             str, Field(description="clientContextID returned by submit_async_query.")
         ],
@@ -830,7 +841,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             client_context_id=clientContextID,
             timeout_ms=timeoutMs,
             capture=capture,
-            client_name=_client_identity(mcp),
+            client_name=_client_identity(ctx),
         )
         return _to_call_tool_result(result)
 
@@ -1042,6 +1053,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         annotations=TOOL_ANNOTATIONS["memory_write"],
     )
     async def memory_write(
+        ctx: Context,
         subject: Annotated[
             str,
             Field(description="Concept identity the note is about, e.g. 'MyDataverse.MyDataset'."),
@@ -1077,7 +1089,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             tags=tags,
             source_query=source_query,
             replaces=replaces,
-            author=_client_identity(mcp),
+            author=_client_identity(ctx),
         )
         return _to_call_tool_result(result)
 
@@ -1087,6 +1099,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
         annotations=TOOL_ANNOTATIONS["remember_preference"],
     )
     async def remember_preference(
+        ctx: Context,
         text: Annotated[
             str,
             Field(description="The query-writing rule to keep (max 500 chars). One rule."),
@@ -1101,7 +1114,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             settings,
             text=text,
             scope=scope,
-            author=_client_identity(mcp),
+            author=_client_identity(ctx),
         )
         return _to_call_tool_result(result)
 
@@ -1500,7 +1513,7 @@ def main() -> None:
     server.run()
 
 
-def _serve_http(server: FastMCP, settings: Settings) -> None:
+def _serve_http(server: MCPServer, settings: Settings) -> None:
     """Serve the Streamable HTTP app over uvicorn (imported lazily for stdio runs)."""
     import uvicorn
 

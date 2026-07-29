@@ -2,21 +2,25 @@
 
 High-end MCP clients read these hints to decide whether a tool can be invoked
 without an explicit user confirmation. The gateway is read-only by architecture
-invariant, so every tool that only reads data carries ``readOnlyHint=True`` and
-``destructiveHint=False`` — a client may run them freely during agentic loops.
+invariant, so every tool that only reads data carries ``read_only_hint=True`` and
+``destructive_hint=False`` — a client may run them freely during agentic loops.
+
+Field names below are the Python spelling. On the wire they stay camelCase
+(``readOnlyHint`` and friends): the SDK carries an alias per field, so this
+module's keyword arguments can be renamed without changing what a client sees.
 
 Hint semantics applied here:
 
-- ``readOnlyHint``  — the tool does not modify data. True for all query,
+- ``read_only_hint``  — the tool does not modify data. True for all query,
   discovery, introspection, and reference tools. The single exception is
   ``cancel_query``, which mutates server-side execution state (it aborts a
   running job) without ever touching stored data.
-- ``destructiveHint`` — the tool can irreversibly destroy data. False for the
+- ``destructive_hint`` — the tool can irreversibly destroy data. False for the
   entire surface; the gateway can never mutate or drop data.
-- ``idempotentHint`` — repeating the call adds no further effect. True
+- ``idempotent_hint`` — repeating the call adds no further effect. True
   everywhere except ``submit_async_query``, where each call allocates a new
   server-side result handle.
-- ``openWorldHint`` — the tool reaches the live external cluster. True for
+- ``open_world_hint`` — the tool reaches the live external cluster. True for
   everything that calls the Cluster Controller; False only for ``get_reference``,
   which reads static reference material bundled inside the gateway.
 
@@ -60,10 +64,10 @@ _LIVE_READ_ONLY = {
 def _live_read_only(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=True,
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=True,
     )
 
 
@@ -76,10 +80,10 @@ TOOL_ANNOTATIONS: dict[str, ToolAnnotations] = {
 # server-side async result handle.
 TOOL_ANNOTATIONS["submit_async_query"] = ToolAnnotations(
     title="Submit Async SQL++ Query",
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=False,
-    openWorldHint=True,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=True,
 )
 
 # cancel_query mutates server-side execution state (aborts a running job). It is
@@ -87,10 +91,10 @@ TOOL_ANNOTATIONS["submit_async_query"] = ToolAnnotations(
 # already-cancelled job is a no-op, so it stays idempotent and non-destructive.
 TOOL_ANNOTATIONS["cancel_query"] = ToolAnnotations(
     title="Cancel Async Query",
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
 )
 
 # memory_write persists agent-curated notes into the AgentMemory.Memory store —
@@ -99,10 +103,10 @@ TOOL_ANNOTATIONS["cancel_query"] = ToolAnnotations(
 # no-op, so it is non-destructive and idempotent.
 TOOL_ANNOTATIONS["memory_write"] = ToolAnnotations(
     title="Write Agent Memory",
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
 )
 
 # remember_preference persists a query-writing rule into AgentMemory.Memory,
@@ -110,28 +114,28 @@ TOOL_ANNOTATIONS["memory_write"] = ToolAnnotations(
 # no-op, so it is non-destructive and idempotent.
 TOOL_ANNOTATIONS["remember_preference"] = ToolAnnotations(
     title="Remember Query Preference",
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
 )
 
 # get_reference reads static documentation bundled in the gateway; it never
 # reaches the cluster, so it is a closed-world read.
 TOOL_ANNOTATIONS["get_reference"] = ToolAnnotations(
     title="Read SQL++ Reference",
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
 # get_query_history reads the in-gateway audit log; like get_reference it never
 # reaches the cluster, so it is a closed-world read.
 TOOL_ANNOTATIONS["get_query_history"] = ToolAnnotations(
     title="Get Query History",
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )

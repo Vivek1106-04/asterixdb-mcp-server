@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 _JSON = dict[str, Any]
 
@@ -441,7 +441,7 @@ OUTPUT_SCHEMAS: dict[str, _JSON] = {
 }
 
 
-def apply_output_schemas(mcp: FastMCP, exclude: tuple[str, ...] = ()) -> None:
+def apply_output_schemas(mcp: MCPServer, exclude: tuple[str, ...] = ()) -> None:
     """Attach each advertised output schema to its registered tool.
 
     The schema is seeded into the ``Tool.output_schema`` cached value so it is
