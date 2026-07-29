@@ -48,6 +48,53 @@ def test_subjects_handle_backticked_names() -> None:
     assert subjects_from_statement("SELECT * FROM `ShopDV`.`Checkin` c;") == ["ShopDV.Checkin"]
 
 
+# Bare collection references. A model that has issued `USE real_estate` writes
+# `FROM substations s`, not `FROM real_estate.substations s` - so requiring a
+# qualified name meant those statements carried no notes at all and their notes
+# were never checked against the rows coming back.
+
+
+def test_bare_collection_qualified_by_the_dataverse_argument() -> None:
+    subjects = subjects_from_statement("SELECT COUNT(*) FROM substations s;", "real_estate")
+    assert subjects == ["real_estate.substations"]
+
+
+def test_bare_collection_qualified_by_a_use_clause() -> None:
+    stmt = "USE real_estate; SELECT COUNT(*) FROM substations s;"
+    assert subjects_from_statement(stmt) == ["real_estate.substations"]
+
+
+def test_use_clause_wins_over_the_dataverse_argument() -> None:
+    """The statement says what it operates on; the argument is only a default."""
+    stmt = "USE real_estate; SELECT * FROM substations;"
+    assert subjects_from_statement(stmt, "other_dv") == ["real_estate.substations"]
+
+
+def test_bare_collection_dropped_when_no_dataverse_is_known() -> None:
+    """An unqualifiable name is ambiguous - guessing would attach another
+    dataverse's notes to this statement."""
+    assert subjects_from_statement("SELECT COUNT(*) FROM substations s;") == []
+
+
+def test_qualified_and_bare_references_mix_in_one_statement() -> None:
+    stmt = "USE real_estate; SELECT * FROM substations s JOIN other_dv.hospitals h ON s.id = h.id;"
+    assert subjects_from_statement(stmt) == ["other_dv.hospitals", "real_estate.substations"]
+
+
+def test_bare_metadata_collection_is_skipped() -> None:
+    assert subjects_from_statement("SELECT * FROM `Dataset` d;", "Metadata") == []
+
+
+def test_bare_reference_deduplicates_against_its_qualified_form() -> None:
+    stmt = "USE real_estate; SELECT * FROM substations a, real_estate.substations b;"
+    assert subjects_from_statement(stmt) == ["real_estate.substations"]
+
+
+def test_subquery_and_array_literals_are_not_read_as_collections() -> None:
+    stmt = "USE real_estate; SELECT * FROM (SELECT 1) t, [1,2,3] arr;"
+    assert subjects_from_statement(stmt) == []
+
+
 # fetch_memory_notes
 
 
