@@ -253,9 +253,17 @@ and row/byte caps on what reaches the LLM.
 - MCP Python SDK 2.x (`mcp>=2.0,<3`, installed as a dependency)
 - A reachable AsterixDB cluster (default `http://localhost:19002`)
 
-The gateway speaks MCP protocol revision **2026-07-28**, read from the SDK rather
-than declared here, so it can never advertise a revision it does not negotiate.
-`asterixdb://version` reports both the gateway version and that revision.
+The SDK serves two protocol eras and the gateway supports both: a classic
+`initialize` handshake, which negotiates up to **2025-11-25**, and a modern era at
+**2026-07-28**. Existing clients keep working unchanged; the newer revision is
+there for clients that ask for it.
+
+`asterixdb://version` reports the gateway version alongside the highest revision
+it can speak (`2026-07-28`). Read that field as a ceiling — a client connected
+over `initialize` is answered with the handshake-era number instead, which is
+correct rather than a mismatch. The value is read from the SDK rather than
+declared here, so the gateway can never advertise a revision it does not
+implement.
 
 ## Install
 
