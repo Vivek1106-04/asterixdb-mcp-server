@@ -250,7 +250,12 @@ and row/byte caps on what reaches the LLM.
 ## Requirements
 
 - Python 3.10+
+- MCP Python SDK 2.x (`mcp>=2.0,<3`, installed as a dependency)
 - A reachable AsterixDB cluster (default `http://localhost:19002`)
+
+The gateway speaks MCP protocol revision **2026-07-28**, read from the SDK rather
+than declared here, so it can never advertise a revision it does not negotiate.
+`asterixdb://version` reports both the gateway version and that revision.
 
 ## Install
 
@@ -261,6 +266,20 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+### Upgrading an existing checkout
+
+The SDK floor moved from 1.x to 2.x, which is a breaking dependency change.
+Pulling without reinstalling leaves the environment on the old SDK and the server
+will fail to import:
+
+```bash
+git pull
+pip install -e ".[dev]"     # required, not optional, across the 1.x -> 2.x move
+```
+
+The wire format is unaffected — the tools block is byte-identical across the
+migration, so connected clients need no change and prompt caching is preserved.
 
 ## Configure
 
