@@ -1,7 +1,7 @@
-"""End-to-end binding tests: call the surface through FastMCP with a mock CC.
+"""End-to-end binding tests: call the surface through MCPServer with a mock CC.
 
 These drive the actual ``server.py`` closures (tools, resources, prompt) and the
-ToolResult -> CallToolResult conversion, so the FastMCP wiring is covered, not
+ToolResult -> CallToolResult conversion, so the MCPServer wiring is covered, not
 just the SDK-agnostic cores.
 """
 
@@ -42,9 +42,9 @@ async def test_execute_query_call_returns_structured_result() -> None:
     result = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
 
     assert isinstance(result, types.CallToolResult)
-    assert result.isError is False
-    assert result.structuredContent["status"] == "success"
-    assert result.structuredContent["rowsReturned"] == 1
+    assert result.is_error is False
+    assert result.structured_content["status"] == "success"
+    assert result.structured_content["rowsReturned"] == 1
 
 
 async def test_success_text_mirrors_structured_payload() -> None:
@@ -66,8 +66,8 @@ async def test_success_text_mirrors_structured_payload() -> None:
 async def test_error_text_has_no_json_mirror() -> None:
     server = _server_with_mock(lambda r: httpx.Response(500, text="boom"))
     result = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
-    assert result.isError is True
-    assert result.structuredContent is None
+    assert result.is_error is True
+    assert result.structured_content is None
     assert "```json" not in result.content[0].text
 
 
@@ -133,10 +133,10 @@ async def test_get_schema_and_list_datasets_calls() -> None:
     server = _server_with_mock(handler)
 
     schema = await server.call_tool("get_schema", {"dataverse": "DV", "dataset": "Events"})
-    assert schema.structuredContent["primaryKey"] == ["id"]
+    assert schema.structured_content["primaryKey"] == ["id"]
 
     listing = await server.call_tool("list_datasets", {})
-    assert listing.structuredContent["totalDatasets"] == 1
+    assert listing.structured_content["totalDatasets"] == 1
 
 
 async def test_list_dataverses_call() -> None:
@@ -147,8 +147,8 @@ async def test_list_dataverses_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("list_dataverses", {})
-    assert result.structuredContent["count"] == 1
-    assert result.structuredContent["dataverses"][0]["dataverse"] == "Yelp"
+    assert result.structured_content["count"] == 1
+    assert result.structured_content["dataverses"][0]["dataverse"] == "Yelp"
 
 
 async def test_describe_dataverse_call() -> None:
@@ -174,7 +174,7 @@ async def test_describe_dataverse_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("describe_dataverse", {"dataverse": "Yelp"})
-    assert result.structuredContent["describedCount"] == 1
+    assert result.structured_content["describedCount"] == 1
 
 
 async def test_sample_dataset_call() -> None:
@@ -188,8 +188,8 @@ async def test_sample_dataset_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("sample_dataset", {"dataverse": "Yelp", "dataset": "Business"})
-    assert result.structuredContent["rowsReturned"] == 1
-    assert result.structuredContent["dataset"] == "Business"
+    assert result.structured_content["rowsReturned"] == 1
+    assert result.structured_content["dataset"] == "Business"
 
 
 async def test_cluster_status_resource_read() -> None:
@@ -206,10 +206,10 @@ async def test_lazy_client_creation_without_injected_http() -> None:
     # No injected client -> _client() lazily builds one against an unreachable URL.
     server = build_server(Settings(cc_base_url="http://127.0.0.1:1", request_timeout_s=1.0))
     result = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
-    assert result.isError is True
+    assert result.is_error is True
     # Error envelopes carry no structured content (it would fail outputSchema
     # validation); the classified errorType is in the text content.
-    assert result.structuredContent is None
+    assert result.structured_content is None
     assert result.content[0].text.split(":")[0] in {"INTERNAL", "TIMEOUT"}
 
 
@@ -223,9 +223,9 @@ async def test_submit_async_query_call() -> None:
     result = await server.call_tool(
         "submit_async_query", {"statement": "SELECT * FROM Big LIMIT 5;"}
     )
-    assert result.isError is False
+    assert result.is_error is False
     # The one lifecycle id is the clientContextID; no raw handle is surfaced.
-    assert result.structuredContent["clientContextID"].startswith("sess-test::")
+    assert result.structured_content["clientContextID"].startswith("sess-test::")
 
 
 async def test_async_lifecycle_submit_wait_fetch_by_client_context_id() -> None:
@@ -248,15 +248,15 @@ async def test_async_lifecycle_submit_wait_fetch_by_client_context_id() -> None:
     submitted = await server.call_tool(
         "submit_async_query", {"statement": "SELECT * FROM Big LIMIT 5;"}
     )
-    ccid = submitted.structuredContent["clientContextID"]
+    ccid = submitted.structured_content["clientContextID"]
 
     waited = await server.call_tool(
         "wait_on_async_query", {"clientContextID": ccid, "timeoutMs": 0}
     )
-    assert waited.structuredContent["done"] is True
+    assert waited.structured_content["done"] is True
 
     fetched = await server.call_tool("fetch_query_result", {"clientContextID": ccid})
-    assert fetched.structuredContent["rowsReturned"] == 1
+    assert fetched.structured_content["rowsReturned"] == 1
 
 
 async def test_wait_unknown_client_context_id_call() -> None:
@@ -264,8 +264,8 @@ async def test_wait_unknown_client_context_id_call() -> None:
     result = await server.call_tool(
         "wait_on_async_query", {"clientContextID": "sess-test::_::missing"}
     )
-    assert result.isError is True
-    assert result.structuredContent is None
+    assert result.is_error is True
+    assert result.structured_content is None
     assert result.content[0].text.split(":")[0] == "NOT_FOUND"
 
 
@@ -276,7 +276,7 @@ async def test_cancel_query_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("cancel_query", {"clientContextID": "sess-test::_::u"})
-    assert result.structuredContent["cancelled"] is True
+    assert result.structured_content["cancelled"] is True
 
 
 async def test_validate_syntax_call() -> None:
@@ -285,7 +285,7 @@ async def test_validate_syntax_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("validate_syntax", {"statement": "SELECT 1;"})
-    assert result.structuredContent["valid"] is True
+    assert result.structured_content["valid"] is True
 
 
 async def test_explain_query_call() -> None:
@@ -305,7 +305,7 @@ async def test_explain_query_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("explain_query", {"statement": "SELECT 1;"})
-    assert result.structuredContent["plan"]["dataSources"] == ["DV.Events"]
+    assert result.structured_content["plan"]["dataSources"] == ["DV.Events"]
 
 
 async def test_explain_physical_plan_call() -> None:
@@ -343,7 +343,7 @@ async def test_explain_physical_plan_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("explain_physical_plan", {"statement": "SELECT 1;"})
-    parsed = result.structuredContent["job"]
+    parsed = result.structured_content["job"]
     assert parsed["operatorCounts"] == {"BTreeSearch": 1}
     assert parsed["connectorCounts"] == {"MToNBroadcast": 1}
     assert parsed["maxPartitionCount"] == 4
@@ -375,8 +375,8 @@ async def test_execute_query_sheds_load_when_sync_pool_full() -> None:
 
     # The second call finds the pool full and is shed with NOT_READY.
     second = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
-    assert second.isError is True
-    assert second.structuredContent is None
+    assert second.is_error is True
+    assert second.structured_content is None
     assert second.content[0].text.split(":")[0] == "NOT_READY"
 
     release.set()
@@ -405,8 +405,8 @@ async def test_check_index_usage_call() -> None:
     result = await server.call_tool(
         "check_index_usage", {"statement": "SELECT * FROM Sales.Orders LIMIT 5;"}
     )
-    assert result.isError is False
-    assert result.structuredContent["usesFullScan"] is True
+    assert result.is_error is False
+    assert result.structured_content["usesFullScan"] is True
 
 
 async def test_list_functions_call() -> None:
@@ -414,7 +414,7 @@ async def test_list_functions_call() -> None:
     live = {"status": "success", "results": [row]}
     server = _server_with_mock(lambda r: httpx.Response(200, json=live))
     result = await server.call_tool("list_functions", {"language": "INTERNAL", "limit": 5})
-    assert result.structuredContent["total"] > 0
+    assert result.structured_content["total"] > 0
 
 
 async def test_get_function_call_builtin() -> None:
@@ -422,8 +422,8 @@ async def test_get_function_call_builtin() -> None:
     live = {"status": "success", "results": [row]}
     server = _server_with_mock(lambda r: httpx.Response(200, json=live))
     result = await server.call_tool("get_function", {"name": "count"})
-    assert result.structuredContent["scope"] == "builtin"
-    assert result.structuredContent["name"] == "count"
+    assert result.structured_content["scope"] == "builtin"
+    assert result.structured_content["name"] == "count"
 
 
 async def test_search_metadata_call() -> None:
@@ -436,7 +436,7 @@ async def test_search_metadata_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("search_metadata", {"query": "orders"})
-    assert result.structuredContent["totalMatches"] == 1
+    assert result.structured_content["totalMatches"] == 1
 
 
 async def test_get_cluster_status_call() -> None:
@@ -447,14 +447,14 @@ async def test_get_cluster_status_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("get_cluster_status", {})
-    assert result.structuredContent["state"] == "ACTIVE"
-    assert result.structuredContent["nodes"][0]["nodeId"] == "nc1"
+    assert result.structured_content["state"] == "ACTIVE"
+    assert result.structured_content["nodes"][0]["nodeId"] == "nc1"
 
 
 async def test_get_node_details_call() -> None:
     server = _server_with_mock(lambda r: httpx.Response(200, json={"nodeId": "nc1"}))
     result = await server.call_tool("get_node_details", {"node": "nc1"})
-    assert result.structuredContent["node"] == "nc1"
+    assert result.structured_content["node"] == "nc1"
 
 
 async def test_dataverses_resource_read() -> None:
@@ -519,8 +519,8 @@ async def test_get_reference_call_returns_static_topic() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("get_reference", {"topic": "index-types"})
-    assert result.structuredContent["topic"] == "index-types"
-    assert result.isError is False
+    assert result.structured_content["topic"] == "index-types"
+    assert result.is_error is False
 
 
 async def test_select_value_scalar_result_survives_and_validates() -> None:
@@ -540,9 +540,9 @@ async def test_select_value_scalar_result_survives_and_validates() -> None:
     result = await server.call_tool(
         "execute_query", {"statement": "SELECT VALUE COUNT(*) FROM DV.Big;"}
     )
-    assert result.isError is False
-    assert result.structuredContent["results"] == [46219]
-    validate(result.structuredContent, OUTPUT_SCHEMAS["execute_query"])
+    assert result.is_error is False
+    assert result.structured_content["results"] == [46219]
+    validate(result.structured_content, OUTPUT_SCHEMAS["execute_query"])
 
 
 async def test_error_result_ships_no_structured_content() -> None:
@@ -551,8 +551,8 @@ async def test_error_result_ships_no_structured_content() -> None:
     # classified errorType stays in the text content.
     server = _server_with_mock(lambda r: httpx.Response(500, text="boom"))
     result = await server.call_tool("execute_query", {"statement": "SELECT VALUE 1;"})
-    assert result.isError is True
-    assert result.structuredContent is None
+    assert result.is_error is True
+    assert result.structured_content is None
     assert result.content[0].text.split(":")[0].isupper()
 
 
@@ -588,8 +588,8 @@ async def test_database_health_check_call_returns_findings() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("database_health_check", {})
-    assert result.isError is False
-    assert result.structuredContent["findingsCount"] == 1
+    assert result.is_error is False
+    assert result.structured_content["findingsCount"] == 1
 
 
 async def test_query_history_records_and_returns_execute_query() -> None:
@@ -599,9 +599,9 @@ async def test_query_history_records_and_returns_execute_query() -> None:
     server = _server_with_mock(handler)
     await server.call_tool("execute_query", {"statement": "SELECT 1;"})
     history = await server.call_tool("get_query_history", {})
-    assert history.isError is False
-    assert history.structuredContent["count"] == 1
-    entry = history.structuredContent["queries"][0]
+    assert history.is_error is False
+    assert history.structured_content["count"] == 1
+    entry = history.structured_content["queries"][0]
     assert entry["tool"] == "execute_query"
     assert entry["outcome"] == "SUCCESS"
     assert entry["statement"] == "SELECT 1;"
@@ -635,9 +635,9 @@ async def test_recommend_indexes_call_uses_native_advise() -> None:
     result = await server.call_tool(
         "recommend_indexes", {"statements": ["SELECT * FROM S.Orders WHERE city='x' LIMIT 5;"]}
     )
-    assert result.isError is False
-    assert result.structuredContent["method"] == "advise"
-    assert result.structuredContent["recommendations"][0]["recommendedDDL"] == ddl + ";"
+    assert result.is_error is False
+    assert result.structured_content["method"] == "advise"
+    assert result.structured_content["recommendations"][0]["recommendedDDL"] == ddl + ";"
 
 
 async def test_get_dataset_statistics_call() -> None:
@@ -656,9 +656,9 @@ async def test_get_dataset_statistics_call() -> None:
     result = await server.call_tool(
         "get_dataset_statistics", {"dataverse": "DV", "dataset": "Events"}
     )
-    assert result.isError is False
-    assert result.structuredContent["analyzed"] is True
-    assert result.structuredContent["statistics"]["estimatedSizeBytes"] == 200000
+    assert result.is_error is False
+    assert result.structured_content["analyzed"] is True
+    assert result.structured_content["statistics"]["estimatedSizeBytes"] == 200000
 
 
 async def test_list_running_queries_call() -> None:
@@ -669,9 +669,9 @@ async def test_list_running_queries_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("list_running_queries", {})
-    assert result.isError is False
-    assert result.structuredContent["count"] == 1
-    assert result.structuredContent["statementsRedacted"] is True
+    assert result.is_error is False
+    assert result.structured_content["count"] == 1
+    assert result.structured_content["statementsRedacted"] is True
 
 
 async def test_profile_query_call() -> None:
@@ -706,8 +706,8 @@ async def test_profile_query_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("profile_query", {"statement": "SELECT 1;"})
-    assert result.isError is False
-    profile = result.structuredContent["profile"]
+    assert result.is_error is False
+    profile = result.structured_content["profile"]
     assert profile["operators"][0]["operator"] == "scan"
     assert profile["operators"][0]["cardinalityOut"] == 100
 
@@ -727,7 +727,7 @@ async def test_profile_query_sheds_load_when_sync_pool_full() -> None:
 
     # The second call finds the pool full and is shed with NOT_READY.
     second = await server.call_tool("profile_query", {"statement": "SELECT 1;"})
-    assert second.isError is True
+    assert second.is_error is True
     assert second.content[0].text.split(":")[0] == "NOT_READY"
 
     release.set()
@@ -735,12 +735,12 @@ async def test_profile_query_sheds_load_when_sync_pool_full() -> None:
 
 
 def test_main_builds_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
     from asterixdb_mcp import server as server_module
 
     ran: dict[str, bool] = {}
-    monkeypatch.setattr(FastMCP, "run", lambda self, *a, **k: ran.setdefault("ran", True))
+    monkeypatch.setattr(MCPServer, "run", lambda self, *a, **k: ran.setdefault("ran", True))
     server_module.main()
     assert ran["ran"] is True
 
@@ -760,7 +760,7 @@ async def test_memory_search_call() -> None:
 
     server = _server_with_mock(handler)
     result = await server.call_tool("memory_search", {"query": "orders"})
-    assert result.structuredContent["matches"][0]["subject"] == "shop.orders"
+    assert result.structured_content["matches"][0]["subject"] == "shop.orders"
 
 
 async def test_structured_results_validate_against_advertised_schemas() -> None:
@@ -785,15 +785,15 @@ async def test_structured_results_validate_against_advertised_schemas() -> None:
         ("search_metadata", {"query": "orders"}),
     ):
         result = await server.call_tool(name, args)
-        assert not result.isError
-        jsonschema.validate(result.structuredContent, tools[name].outputSchema)
+        assert not result.is_error
+        jsonschema.validate(result.structured_content, tools[name].output_schema)
 
 
 async def test_memory_write_disabled_by_default() -> None:
     server = _server_with_mock(lambda r: httpx.Response(200, json={"status": "success"}))
     result = await server.call_tool("memory_write", {"subject": "dv.ds", "text": "note"})
-    assert result.isError
-    assert result.structuredContent is None
+    assert result.is_error
+    assert result.structured_content is None
     assert "FORBIDDEN" in result.content[0].text
 
 
@@ -806,12 +806,12 @@ async def test_memory_write_enabled_creates_and_validates_schema() -> None:
 
     server = _server_with_mock(handler, memory_write_enabled=True)
     result = await server.call_tool("memory_write", {"subject": "dv.ds", "text": "note"})
-    assert not result.isError
-    assert result.structuredContent["action"] == "created"
+    assert not result.is_error
+    assert result.structured_content["action"] == "created"
     tools = {t.name: t for t in await server.list_tools()}
-    jsonschema.validate(result.structuredContent, tools["memory_write"].outputSchema)
+    jsonschema.validate(result.structured_content, tools["memory_write"].output_schema)
     annotations = tools["memory_write"].annotations
-    assert annotations.readOnlyHint is False and annotations.destructiveHint is False
+    assert annotations.read_only_hint is False and annotations.destructive_hint is False
 
 
 async def test_remember_preference_records_rule_via_call_surface() -> None:
@@ -822,4 +822,4 @@ async def test_remember_preference_records_rule_via_call_surface() -> None:
     result = await server.call_tool(
         "remember_preference", {"text": "always project columns instead of SELECT *"}
     )
-    assert not result.isError
+    assert not result.is_error

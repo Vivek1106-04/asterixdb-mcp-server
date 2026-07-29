@@ -4,7 +4,9 @@ The gateway is a stdio sidecar by default. Setting ``transport=http`` exposes th
 MCP Streamable HTTP endpoint so remote and multi-client callers (web agents, a
 shared deployment) can reach it. This module assembles the ASGI app; the security
 posture (DNS-rebinding allowlist, oauth wiring, startup checks) lives in
-``http_security`` and is applied to the FastMCP instance in ``build_server``.
+``http_security``: the oauth wiring is applied to the server in ``build_server``,
+while the bind address and DNS-rebinding allowlist are transport arguments and so
+are applied here, where the ASGI app is actually built.
 
 Two things are owned here:
 
@@ -16,7 +18,7 @@ Two things are owned here:
 
 2. Bearer authentication (``auth_mode='bearer'``) — a shared static token checked
    in constant time on every request except ``/health``. The richer
-   ``auth_mode='oauth'`` path is wired into FastMCP itself (resource-server JWT
+   ``auth_mode='oauth'`` path is wired into the MCP server itself (resource-server JWT
    validation) and needs no middleware here. ``auth_mode='none'`` serves open and
    is allowed only on a loopback bind (enforced in ``http_security``).
 
@@ -35,7 +37,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import cast
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -46,6 +48,7 @@ from .artifacts import resolve_artifact_file
 from .cc_client import CCClient
 from .config import ARTIFACTS_PATH_PREFIX, HEALTH_PATH, Settings
 from .distill import run_distill
+from .http_security import build_transport_security
 
 logger = logging.getLogger(__name__)
 
@@ -167,14 +170,19 @@ def _install_auto_distill(app: Starlette, settings: Settings) -> None:
     app.router.lifespan_context = lifespan
 
 
-def build_http_app(mcp: FastMCP, settings: Settings) -> Starlette:
+def build_http_app(mcp: MCPServer, settings: Settings) -> Starlette:
     """Build the Streamable HTTP ASGI app: MCP endpoint, ``/health``, and auth.
 
-    The MCP path/host/port and any oauth resource-server auth are already seeded on
-    the FastMCP instance by ``build_server``. Here we append the health route and,
-    for bearer mode, wrap everything except ``/health`` with the token check.
+    Any oauth resource-server auth is already seeded on the server instance by
+    ``build_server``. The bind address, mount path and DNS-rebinding allowlist are
+    transport arguments, so they are supplied here. Then we append the health route
+    and, for bearer mode, wrap everything except ``/health`` with the token check.
     """
-    app = mcp.streamable_http_app()
+    app = mcp.streamable_http_app(
+        host=settings.http_host,
+        streamable_http_path=settings.http_path,
+        transport_security=build_transport_security(settings),
+    )
     app.router.routes.append(Route(HEALTH_PATH, health, methods=["GET"]))
     # Overflow artifact downloads. Deliberately NOT exempt from auth below: the
     # file holds the full result, so it sits behind the same credential as the

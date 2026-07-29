@@ -1,7 +1,7 @@
 """Tool core logic.
 
 Each tool is an SDK-agnostic async run_* function returning a ToolResult. The
-MCP/FastMCP binding lives in asterixdb_mcp.server, so tool logic stays fully
+MCP server binding lives in asterixdb_mcp.server, so tool logic stays fully
 unit-testable without standing up an MCP transport.
 """
 

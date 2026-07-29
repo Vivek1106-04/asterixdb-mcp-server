@@ -13,7 +13,7 @@ responsibility:
    silently exposing the database: refuse a non-loopback bind with no auth, a
    bearer mode with a missing/short token, or an oauth mode missing its AS config.
 
-3. ``build_auth`` — assemble the FastMCP resource-server auth settings and token
+3. ``build_auth`` — assemble the MCP resource-server auth settings and token
    verifier for oauth mode.
 """
 

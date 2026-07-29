@@ -1,10 +1,15 @@
 """Contract tests: the identity this server reports about itself.
 
 ``serverInfo`` and the ``version`` resource are how a client tells one gateway
-build from another. Both have failed silently before - FastMCP does not forward a
-version to the low-level server, so the SDK's own version leaks out in its place,
-and the advertised protocol revision was a hand-written constant that stopped
-matching the SDK it runs on.
+build from another. Both have failed silently before: the 1.x FastMCP class took
+no version argument and never forwarded one, so the low-level server fell back to
+the SDK's own version and reported it as ours, and the advertised protocol
+revision was a hand-written constant that stopped matching the SDK it ran on.
+
+The 2.x ``MCPServer`` accepts ``version`` directly, so the first failure mode is
+now structurally impossible rather than merely fixed. The assertions stay: they
+cost nothing and they are what would catch the next SDK that decides serverInfo
+should default to something of its own choosing.
 """
 
 from __future__ import annotations
@@ -29,14 +34,14 @@ def server() -> object:
 
 def test_server_info_reports_this_package_version(server) -> None:
     # Arrange / Act
-    options = server._mcp_server.create_initialization_options()
+    options = server._lowlevel_server.create_initialization_options()
 
     # Assert
     assert options.server_version == __version__
 
 
 def test_server_info_does_not_leak_the_sdk_version(server) -> None:
-    """The regression this guards: FastMCP falling back to ``pkg_version("mcp")``.
+    """The regression this guards: serverInfo falling back to ``pkg_version("mcp")``.
 
     Asserted separately from the positive check so the failure message names the
     actual defect rather than just showing two unequal strings.
@@ -45,12 +50,12 @@ def test_server_info_does_not_leak_the_sdk_version(server) -> None:
     sdk_version = pkg_version("mcp")
 
     # Act
-    options = server._mcp_server.create_initialization_options()
+    options = server._lowlevel_server.create_initialization_options()
 
     # Assert
     assert options.server_version != sdk_version, (
-        "serverInfo.version is reporting the mcp SDK version. FastMCP does not "
-        "forward a version, so the low-level Server falls back to pkg_version('mcp')."
+        "serverInfo.version is reporting the mcp SDK version rather than the "
+        "gateway's own. Check that build_server still passes version= to MCPServer."
     )
 
 

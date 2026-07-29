@@ -406,7 +406,7 @@ src/asterixdb_mcp/
   permits.py         # non-blocking concurrency permit pools
   statement_guard.py # pre-flight read-only statement guard
   plan_guard.py      # plan-layer mutation backstop
-  server.py          # FastMCP binding + transport selection (stdio | http)
+  server.py          # MCP server binding + transport selection (stdio | http)
   http_app.py        # Streamable HTTP ASGI app, /health probe, bearer middleware
   http_security.py   # DNS-rebinding allowlist, startup checks, oauth wiring
   auth.py            # OAuth 2.1 resource-server JWT verification (JWKS)

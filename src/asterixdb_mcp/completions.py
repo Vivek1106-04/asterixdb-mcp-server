@@ -64,7 +64,7 @@ def rank_completions(candidates: list[str | None], partial: str | None) -> Compl
     ordered = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))
     names = [name for name, _ in ordered]
     values = names[:MAX_COMPLETION_VALUES]
-    return Completion(values=values, total=len(names), hasMore=len(names) > len(values))
+    return Completion(values=values, total=len(names), has_more=len(names) > len(values))
 
 
 def _match_score(name_lower: str, needle: str) -> int | None:
@@ -151,4 +151,4 @@ async def _complete_field(
 
 
 def _empty() -> Completion:
-    return Completion(values=[], total=0, hasMore=False)
+    return Completion(values=[], total=0, has_more=False)
