@@ -21,6 +21,7 @@ from mcp import types
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
+from . import __version__
 from .audit_log import AuditLog
 from .cc_client import CCClient
 from .completions import complete_argument
@@ -615,6 +616,10 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> F
             mcp_kwargs["token_verifier"] = token_verifier
     instructions = SERVER_INSTRUCTIONS if settings.memory_enabled else SERVER_INSTRUCTIONS_NO_MEMORY
     mcp = FastMCP("asterixdb-mcp-server", instructions=instructions, **mcp_kwargs)
+    # FastMCP takes no version argument and never forwards one, so the low-level
+    # server falls back to pkg_version("mcp") and reports the SDK's version as
+    # ours in serverInfo. Clients use that field to tell gateway builds apart.
+    mcp._mcp_server.version = __version__
 
     def _client() -> CCClient:
         return holder.get()

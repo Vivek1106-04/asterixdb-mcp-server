@@ -6,7 +6,12 @@ AsterixDB Cluster Controller remains the single authority on parsing, planning,
 and ``readonly=true`` enforcement.
 """
 
+from mcp.types import LATEST_PROTOCOL_VERSION
+
 __version__ = "0.1.0"
 
-# MCP protocol revision this gateway targets.
-MCP_PROTOCOL_VERSION = "2025-03-26"
+# MCP protocol revision this gateway speaks. Read from the SDK rather than
+# hand-written: the SDK implements the wire protocol, so a literal here goes
+# stale the moment it is bumped and starts advertising a revision the server
+# does not actually negotiate.
+MCP_PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION
