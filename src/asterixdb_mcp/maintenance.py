@@ -45,6 +45,7 @@ from .errors import GatewayError
 from .identity import resolve_principal
 from .migrate import backfill_principals
 from .okf_walk import bootstrap_store, run_walk
+from .revalidate import run_revalidation
 from .tools.memory_capture import flush_buffered_events
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,9 @@ async def _maintenance_pass(settings: Settings) -> None:
         # after an outage pay for the whole outage.
         await _step("flush", flush_buffered_events(client, settings))
         await _step("walk", _log_summary("walk", run_walk(client, settings)))
+        # Replay before decay: a note its own proof refutes should be retired as
+        # refuted, not left to expire later as merely unused.
+        await _step("revalidate", _log_summary("revalidate", run_revalidation(client, settings)))
         await _step("decay", _log_summary("decay", run_decay(client, settings)))
         await _step("distill", _log_summary("distill", run_distill(client, settings)))
 
