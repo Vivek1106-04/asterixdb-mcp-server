@@ -23,7 +23,7 @@ import httpx
 from .config import Settings
 from .egress import enforce_byte_ceiling, format_timeout
 from .errors import ErrorType, GatewayError, classify_cc_error
-from .memory_store import BOOTSTRAP_STATEMENTS, MEMORY_WRITE_PREFIXES
+from .memory_store import BOOTSTRAP_STATEMENTS, MEMORY_WRITE_PREFIXES, tag
 
 QUERY_SERVICE_PATH = "/query/service"
 ADMIN_VERSION_PATH = "/admin/version"
@@ -59,6 +59,20 @@ def _memory_bootstrap_statements() -> frozenset[str]:
     return frozenset(BOOTSTRAP_STATEMENTS)
 
 
+def _owned_by(statement_parameters: dict[str, Any] | None, principal: str) -> dict[str, Any] | None:
+    """Statement parameters with the bound row stamped as the tenant's.
+
+    Bootstrap DDL binds no row, so there is nothing to stamp; a row of some
+    other shape is passed through untouched rather than guessed at.
+    """
+    if not statement_parameters:
+        return statement_parameters
+    row = statement_parameters.get("row")
+    if not isinstance(row, dict):
+        return statement_parameters
+    return {**statement_parameters, "row": tag(row, principal)}
+
+
 # Acceptable JSON values that the CC may use for a successful query envelope.
 _SUCCESS_STATUSES = frozenset({"success"})
 
@@ -76,9 +90,26 @@ _STALE_CONNECTION_ERRORS = (
 class CCClient:
     """Async wrapper over the AsterixDB CC REST endpoints used by the gateway tools."""
 
-    def __init__(self, settings: Settings, http: httpx.AsyncClient) -> None:
+    def __init__(
+        self, settings: Settings, http: httpx.AsyncClient, principal: str | None = None
+    ) -> None:
         self._settings = settings
         self._http = http
+        self._principal = principal
+
+    @property
+    def principal(self) -> str | None:
+        """The tenant this client writes memory as, or None when unbound."""
+        return self._principal
+
+    def for_principal(self, principal: str) -> CCClient:
+        """A view of this client bound to one tenant.
+
+        A new object rather than a mutation, so the caller's client keeps its own
+        binding and two concurrent tenants can never race over one field. The
+        connection pool and settings are shared: only the identity differs.
+        """
+        return CCClient(self._settings, self._http, principal)
 
     # /query/service
 
@@ -131,6 +162,11 @@ class CCClient:
         memory_write_enabled setting must be on, and the statement must be an
         INSERT/UPSERT into ``AgentMemory.Memory`` (the memory_write tool builds
         it; row values are bound as statement parameters, never spliced).
+
+        This is also where a row learns which tenant owns it. Stamping here
+        rather than at each write site means no caller can forget, and a client
+        that was never bound to a tenant cannot write at all — an untagged row
+        would be readable by nobody, so silence would be worse than an error.
         """
         if not self._settings.memory_write_enabled:
             raise GatewayError(
@@ -147,6 +183,11 @@ class CCClient:
                 "Only INSERT/UPSERT statements targeting the AgentMemory store (or its "
                 "exact bootstrap DDL) are permitted on the memory write path.",
             )
+        if self._principal is None:
+            raise GatewayError(
+                ErrorType.INTERNAL,
+                "Refusing to write memory from a client that is not bound to a tenant.",
+            )
         form = self._build_query_form(
             statement,
             client_context_id=client_context_id,
@@ -155,7 +196,7 @@ class CCClient:
             profile=False,
             max_warnings=5,
             compiler_parameters=None,
-            statement_parameters=statement_parameters,
+            statement_parameters=_owned_by(statement_parameters, self._principal),
         )
         form["readonly"] = "false"
         envelope = await self._post_query(form)

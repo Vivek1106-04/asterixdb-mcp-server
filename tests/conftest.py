@@ -37,6 +37,10 @@ def settings() -> Settings:
     )
 
 
+# The tenant test clients write as, unless a test asks for another one.
+TEST_PRINCIPAL = "test-tenant"
+
+
 @dataclass
 class CapturingCC:
     """A CCClient wired to a MockTransport that records every request it sees."""
@@ -59,8 +63,14 @@ def make_capturing_cc(
     response_json: dict[str, Any] | None = None,
     status_code: int = 200,
     handler: Callable[[httpx.Request], httpx.Response] | None = None,
+    principal: str | None = TEST_PRINCIPAL,
 ) -> CapturingCC:
-    """Build a CapturingCC returning a fixed JSON body (or a custom handler)."""
+    """Build a CapturingCC returning a fixed JSON body (or a custom handler).
+
+    The client comes back bound to a tenant, mirroring the server, which binds
+    every client that can reach memory. Pass ``principal=None`` for the tests
+    that assert what an unbound client does.
+    """
     captured = CapturingCC(client=None)
     default_body = (
         response_json if response_json is not None else {"status": "success", "results": []}
@@ -74,7 +84,8 @@ def make_capturing_cc(
 
     transport = httpx.MockTransport(_handler)
     http = httpx.AsyncClient(transport=transport, base_url=settings.cc_base_url)
-    captured.client = CCClient(settings, http)
+    client = CCClient(settings, http)
+    captured.client = client if principal is None else client.for_principal(principal)
     return captured
 
 
