@@ -25,6 +25,7 @@ makes consolidation zero-effort for non-technical operators.
 
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -43,7 +44,18 @@ MIN_FAILURES_DEFAULT = 3
 MIN_SLOW_OCCURRENCES_DEFAULT = 3
 SLOW_MS_DEFAULT = 5_000.0
 
-EVENTS_QUERY = f"SELECT VALUE e FROM {SESSION_EVENT_DATASET} e WHERE {scope_clause('e')};"
+# Bounds on the episodic read. The window is what stops this growing with the age
+# of the deployment; the limit is what stops a burst inside the window from
+# undoing that. Distillation only ever wanted recent corroboration, so neither
+# bound costs it anything it was using.
+EVENT_SCAN_LIMIT = 20_000
+_SECONDS_PER_DAY = 86_400.0
+
+EVENTS_QUERY = (
+    f"SELECT VALUE e FROM {SESSION_EVENT_DATASET} e "
+    f"WHERE e.ts > $since AND {scope_clause('e')} "
+    f"LIMIT {EVENT_SCAN_LIMIT};"
+)
 
 
 def dedupe_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -135,10 +147,15 @@ def slow_patterns(
     return distilled
 
 
-async def fetch_cluster_events(client: CCClient, ccid: str) -> list[dict[str, Any]]:
-    """Read every recorded session event from the cluster (best-effort)."""
+async def fetch_cluster_events(
+    client: CCClient, ccid: str, settings: Settings
+) -> list[dict[str, Any]]:
+    """Read recent session events from the cluster (best-effort, windowed)."""
+    since = time.time() - settings.event_retention_days * _SECONDS_PER_DAY
     try:
-        envelope = await client.execute_memory_read(EVENTS_QUERY, client_context_id=ccid)
+        envelope = await client.execute_memory_read(
+            EVENTS_QUERY, client_context_id=ccid, statement_parameters={"since": since}
+        )
     except GatewayError:
         return []
     return [row for row in envelope.get("results", []) if isinstance(row, dict)]
@@ -160,7 +177,7 @@ async def run_distill(
     calling this must survive any single bad pass.
     """
     ccid = make_client_context_id(settings.agent_session_id, "distill")
-    events = dedupe_events(await fetch_cluster_events(client, ccid))
+    events = dedupe_events(await fetch_cluster_events(client, ccid, settings))
     proven = proven_queries(events, min_sessions)
     cautions = recurring_failures(events, min_failures)
     slow = slow_patterns(events, min_slow_occurrences, slow_ms)

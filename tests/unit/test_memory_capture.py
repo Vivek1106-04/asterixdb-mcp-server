@@ -17,6 +17,7 @@ from asterixdb_mcp.tools.memory_capture import (
     _trim,
     capture_error_signal,
     capture_query_outcome,
+    flush_buffered_events,
 )
 from tests.conftest import make_capturing_cc
 
@@ -233,6 +234,7 @@ async def test_buffered_events_flush_on_next_successful_write(
     await capture_query_outcome(
         cap.client, settings, CaptureState(), statement=FIX, result_error=None
     )
+    await flush_buffered_events(cap.client, settings)
     # live event insert + one replayed buffered event; buffer removed
     forms = [parse_qs(r.content.decode()) for r in cap.requests]
     assert all(f["statement"][0].startswith("INSERT INTO AgentMemory.SessionEvent") for f in forms)
@@ -252,6 +254,7 @@ async def test_flush_survives_unreadable_buffer(settings: Settings, tmp_path: Pa
     await capture_query_outcome(
         cap.client, settings, CaptureState(), statement=FIX, result_error=None
     )
+    await flush_buffered_events(cap.client, settings)
     assert len(cap.requests) == 1  # live event recorded; flush degraded silently
 
 
@@ -269,6 +272,7 @@ async def test_flush_survives_undeletable_buffer(
     await capture_query_outcome(
         cap.client, settings, CaptureState(), statement=FIX, result_error=None
     )
+    await flush_buffered_events(cap.client, settings)
     assert len(cap.requests) == 2  # live + replayed; failed unlink swallowed
 
 
@@ -327,6 +331,7 @@ async def test_flush_replays_buffers_from_other_sessions(
     await capture_query_outcome(
         cap.client, settings, CaptureState(), statement=FIX, result_error=None
     )
+    await flush_buffered_events(cap.client, settings)
 
     rows = [
         json.loads(parse_qs(r.content.decode())["$row"][0])
@@ -353,5 +358,6 @@ async def test_flush_degrades_when_log_dir_unlistable(
     await capture_query_outcome(
         cap.client, settings, CaptureState(), statement=FIX, result_error=None
     )
+    await flush_buffered_events(cap.client, settings)
     statements = [parse_qs(r.content.decode())["statement"][0] for r in cap.requests]
     assert any("SessionEvent" in s for s in statements)

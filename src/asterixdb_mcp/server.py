@@ -726,6 +726,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
             result_error=capture_error_signal(result),
             client_name=_client_identity(ctx),
             metrics=(result.structured or {}).get("metrics"),
+            session=scopes.for_call(ctx, settings).identity.session,
         )
         return _to_call_tool_result(result)
 

@@ -15,6 +15,7 @@ import pytest
 
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.tools import memory_capture
+from tests.conftest import make_capturing_cc
 
 pytestmark = pytest.mark.anyio
 
@@ -116,3 +117,40 @@ def test_an_unreadable_buffer_directory_does_not_raise(tmp_path: Path) -> None:
 
 def test_the_default_cap_is_bounded(tmp_path: Path) -> None:
     assert 0 < Settings().session_log_max_bytes <= 64 * 1024 * 1024
+
+
+# M1/M2 — the buffer must not be touched synchronously on a user's query
+
+
+async def test_recording_an_event_does_not_replay_the_backlog(tmp_path: Path) -> None:
+    # M2: replay was awaited inside capture_query_outcome, so the first query
+    # after an outage absorbed the entire backlog, one INSERT per line.
+    settings = _settings(tmp_path, cap=10_000).model_copy(update={"memory_write_enabled": True})
+    (tmp_path / "old-session.jsonl").write_text('{"id": "e1"}\n{"id": "e2"}\n')
+    cap = make_capturing_cc(settings, principal="tenant-a")
+
+    await memory_capture._record_session_event(cap.client, settings, "SELECT 1;", None)
+
+    # One insert for this event, and nothing for the two buffered lines.
+    assert len(cap.requests) == 1
+
+
+async def test_maintenance_is_what_drains_the_backlog(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, cap=10_000).model_copy(update={"memory_write_enabled": True})
+    (tmp_path / "old-session.jsonl").write_text('{"id": "e1"}\n{"id": "e2"}\n')
+    cap = make_capturing_cc(settings, principal="tenant-a")
+
+    await memory_capture.flush_buffered_events(cap.client, settings)
+
+    assert len(cap.requests) == 2
+    assert not (tmp_path / "old-session.jsonl").exists()
+
+
+async def test_buffer_writes_do_not_block_the_event_loop(tmp_path: Path) -> None:
+    # M1: read_text/open/unlink ran inside awaited coroutines on the request
+    # path. Individually microseconds; under load with a large buffer, a stall.
+    import inspect
+
+    source = inspect.getsource(memory_capture._record_session_event)
+
+    assert "to_thread" in source

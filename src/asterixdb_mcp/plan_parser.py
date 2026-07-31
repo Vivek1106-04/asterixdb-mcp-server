@@ -121,17 +121,31 @@ def parse_optimized_plan(plans: Any) -> ParsedPlan | None:
     return parse_plan(plans, OPTIMIZED_PLAN_KEY)
 
 
-def datasets_from_sources(
+@dataclass(frozen=True)
+class ResolvedSources:
+    """What a plan's data sources resolved to, and what they did not.
+
+    Keeping the failures is the whole point. An advisory may ignore a source it
+    could not name; an authorization check may not, because a source it never saw
+    is a source it never checked.
+    """
+
+    datasets: tuple[tuple[str, str], ...]
+    unresolved: tuple[str, ...]
+
+
+def resolve_sources(
     data_sources: tuple[str, ...], default_dataverse: str | None
-) -> list[tuple[str, str]]:
+) -> ResolvedSources:
     """Turn plan data-source strings (``Dataverse.Dataset[.index]``) into (dv, ds) pairs.
 
     A single-segment source (just a dataset name) is qualified with
-    ``default_dataverse`` when one is given, otherwise skipped. Order-preserving
-    and de-duplicated.
+    ``default_dataverse`` when one is given, and reported as *unresolved* when
+    there is none. Order-preserving and de-duplicated.
     """
     seen: set[tuple[str, str]] = set()
-    result: list[tuple[str, str]] = []
+    datasets: list[tuple[str, str]] = []
+    unresolved: list[str] = []
     for source in data_sources:
         parts = source.split(".")
         if len(parts) >= 2:
@@ -139,11 +153,25 @@ def datasets_from_sources(
         elif default_dataverse:
             pair = (default_dataverse, parts[0])
         else:
+            if source not in unresolved:
+                unresolved.append(source)
             continue
         if pair not in seen:
             seen.add(pair)
-            result.append(pair)
-    return result
+            datasets.append(pair)
+    return ResolvedSources(datasets=tuple(datasets), unresolved=tuple(unresolved))
+
+
+def datasets_from_sources(
+    data_sources: tuple[str, ...], default_dataverse: str | None
+) -> list[tuple[str, str]]:
+    """The resolvable ``(dataverse, dataset)`` pairs — for advisory callers only.
+
+    Deliberately lossy: unresolvable sources are dropped. Acceptable for a hint the
+    model may ignore, unacceptable for a decision that gates execution, so anything
+    authorizing calls ``resolve_sources`` and handles ``unresolved`` itself.
+    """
+    return list(resolve_sources(data_sources, default_dataverse).datasets)
 
 
 def _parse_node(node: dict[str, Any]) -> PlanOperator:

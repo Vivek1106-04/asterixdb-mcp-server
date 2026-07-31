@@ -45,6 +45,7 @@ from .errors import GatewayError
 from .identity import resolve_principal
 from .migrate import backfill_principals
 from .okf_walk import bootstrap_store, run_walk
+from .tools.memory_capture import flush_buffered_events
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,10 @@ async def _maintenance_pass(settings: Settings) -> None:
         # Before anything reads the store: rows written before tenant scoping
         # carry no owner, and every read now filters on one.
         await _step("backfill", _log_summary("backfill", backfill_principals(client, settings)))
+        # Draining the offline buffer belongs here rather than on a user's query:
+        # it is one INSERT per buffered line, so inline it made the first query
+        # after an outage pay for the whole outage.
+        await _step("flush", flush_buffered_events(client, settings))
         await _step("walk", _log_summary("walk", run_walk(client, settings)))
         await _step("decay", _log_summary("decay", run_decay(client, settings)))
         await _step("distill", _log_summary("distill", run_distill(client, settings)))
