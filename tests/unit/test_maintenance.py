@@ -134,6 +134,10 @@ async def test_steps_degrade_independently(monkeypatch: pytest.MonkeyPatch) -> N
         order.append("failing")
         raise GatewayError(ErrorType.INTERNAL, "unavailable")
 
+    async def ok_backfill(*args: object, **kwargs: object) -> dict[str, int]:
+        order.append("backfill")
+        return {"concepts": 0, "events": 0}
+
     async def ok_decay(*args: object, **kwargs: object) -> dict[str, int]:
         order.append("decay")
         return {"candidates": 0, "archived": 0}
@@ -142,12 +146,16 @@ async def test_steps_degrade_independently(monkeypatch: pytest.MonkeyPatch) -> N
         order.append("distill")
         return {"events": 0}
 
+    # Every step is stubbed, including the ones expected to succeed: an
+    # unstubbed step would reach for the network, and what it does when the
+    # host does not resolve is the environment's business, not this test's.
     monkeypatch.setattr(maintenance, "bootstrap_store", failing)
+    monkeypatch.setattr(maintenance, "backfill_principals", ok_backfill)
     monkeypatch.setattr(maintenance, "run_walk", failing)
     monkeypatch.setattr(maintenance, "run_decay", ok_decay)
     monkeypatch.setattr(maintenance, "run_distill", ok_distill)
     await maintenance._maintenance_pass(_enabled_settings())
-    assert order == ["failing", "failing", "decay", "distill"]
+    assert order == ["failing", "backfill", "failing", "decay", "distill"]
 
 
 def test_lock_path_is_temp_scoped_and_cluster_keyed() -> None:
