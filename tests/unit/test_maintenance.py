@@ -138,6 +138,13 @@ async def test_steps_degrade_independently(monkeypatch: pytest.MonkeyPatch) -> N
         order.append("backfill")
         return {"concepts": 0, "events": 0}
 
+    async def ok_flush(*args: object, **kwargs: object) -> None:
+        order.append("flush")
+
+    async def ok_revalidate(*args: object, **kwargs: object) -> dict[str, int]:
+        order.append("revalidate")
+        return {"checked": 0, "retired": 0, "unprovable": 0}
+
     async def ok_decay(*args: object, **kwargs: object) -> dict[str, int]:
         order.append("decay")
         return {"candidates": 0, "archived": 0}
@@ -151,11 +158,21 @@ async def test_steps_degrade_independently(monkeypatch: pytest.MonkeyPatch) -> N
     # host does not resolve is the environment's business, not this test's.
     monkeypatch.setattr(maintenance, "bootstrap_store", failing)
     monkeypatch.setattr(maintenance, "backfill_principals", ok_backfill)
+    monkeypatch.setattr(maintenance, "flush_buffered_events", ok_flush)
     monkeypatch.setattr(maintenance, "run_walk", failing)
+    monkeypatch.setattr(maintenance, "run_revalidation", ok_revalidate)
     monkeypatch.setattr(maintenance, "run_decay", ok_decay)
     monkeypatch.setattr(maintenance, "run_distill", ok_distill)
     await maintenance._maintenance_pass(_enabled_settings())
-    assert order == ["failing", "backfill", "failing", "decay", "distill"]
+    assert order == [
+        "failing",
+        "backfill",
+        "flush",
+        "failing",
+        "revalidate",
+        "decay",
+        "distill",
+    ]
 
 
 def test_lock_path_is_temp_scoped_and_cluster_keyed() -> None:

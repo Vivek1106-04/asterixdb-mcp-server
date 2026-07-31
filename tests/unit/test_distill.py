@@ -64,7 +64,7 @@ async def test_fetch_cluster_events_degrades_to_empty(settings: Settings) -> Non
         response_json={"status": "fatal", "errors": [{"code": 1, "msg": "CC down"}]},
         status_code=500,
     )
-    assert await fetch_cluster_events(cap.client, "ccid") == []
+    assert await fetch_cluster_events(cap.client, "ccid", settings) == []
 
 
 async def test_run_distill_writes_proven_and_caution_notes(settings: Settings) -> None:

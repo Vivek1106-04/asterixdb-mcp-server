@@ -29,6 +29,7 @@ DEFAULT_MAX_CONCURRENT_WAITS = 16  # in-gateway long-poll loops in flight
 DEFAULT_PERMITS_PER_PRINCIPAL = 2  # one tenant's slice of any single pool
 DEFAULT_SESSION_IDLE_TIMEOUT_S = 1800.0  # SDK's recommendation; 0 disables reaping
 DEFAULT_SESSION_LOG_MAX_BYTES = 32 * 1024 * 1024  # whole-directory budget for the event buffer
+DEFAULT_EVENT_RETENTION_DAYS = 30.0  # how far back distillation reads the episodic log
 
 # Async long-poll bounds (see wait_on_async_query).
 DEFAULT_MAX_WAIT_MS = 10_000  # ceiling on a single wait_on_async_query call
@@ -183,6 +184,20 @@ class Settings(BaseSettings):
         description="Max permits any one tenant may hold in a single pool. Bounds a "
         "noisy neighbour: without it, one tenant can take every permit and every "
         "other tenant sees NOT_READY.",
+    )
+    event_retention_days: float = Field(
+        default=DEFAULT_EVENT_RETENTION_DAYS,
+        gt=0,
+        description="How far back distillation reads the episodic event log. Bounds "
+        "the scan by the age of the deployment rather than letting it grow with it; "
+        "corroboration older than this stops counting.",
+    )
+    dataverse_allowlist: dict[str, list[str]] | None = Field(
+        default=None,
+        description="Which dataverses each principal may read, as {principal: "
+        "[dataverse, ...]}. Unset disables tenant scoping entirely and costs nothing. "
+        "Set, it is enforced on the compiled plan and fails closed: a principal not "
+        "listed here reads nothing.",
     )
     session_idle_timeout_s: float = Field(
         default=DEFAULT_SESSION_IDLE_TIMEOUT_S,

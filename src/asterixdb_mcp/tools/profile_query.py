@@ -31,6 +31,7 @@ from ..context_id import make_client_context_id
 from ..errors import GatewayError
 from ..profile_parser import parse_profile
 from ..statement_guard import check_unsupported_functions, normalize_statement
+from ..tenant_policy import authorize_statement
 from . import ToolResult
 
 DEFAULT_LIMIT = 100
@@ -55,6 +56,9 @@ async def run_profile_query(
     ccid = make_client_context_id(settings.agent_session_id, user_tag)
 
     try:
+        await authorize_statement(
+            client, settings, statement=effective_statement, dataverse=dataverse, ccid=ccid
+        )
         envelope = await client.execute(
             effective_statement,
             client_context_id=ccid,

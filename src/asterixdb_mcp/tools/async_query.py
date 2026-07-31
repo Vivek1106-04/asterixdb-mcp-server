@@ -31,6 +31,7 @@ from ..errors import ErrorType, GatewayError, classify_cc_error
 from ..permits import PermitPools
 from ..plan_guard import assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
+from ..tenant_policy import check_compiled_plan
 from . import ToolResult
 from .memory_capture import CaptureState, capture_query_outcome
 
@@ -86,6 +87,7 @@ async def run_submit_async_query(
             emit_plan=True,
             signature=True,
         )
+        check_compiled_plan(settings, client.principal, compiled, dataverse)
         advisory = await assess_columnar_scan(
             client, client_context_id, compiled.get("plans"), dataverse
         )
@@ -227,6 +229,7 @@ async def _capture_terminal_outcome(
     entry: AuditEntry,
     status: str,
     client_name: str | None,
+    session: str | None = None,
 ) -> None:
     """Feed an async query's terminal outcome through memory capture (best-effort)."""
     error_signal = None if status == _SUCCESS_STATUS else _FAILURE_ERROR_TYPES[status].value
@@ -237,6 +240,7 @@ async def _capture_terminal_outcome(
         statement=entry.statement,
         result_error=error_signal,
         client_name=client_name,
+        session=session,
     )
 
 

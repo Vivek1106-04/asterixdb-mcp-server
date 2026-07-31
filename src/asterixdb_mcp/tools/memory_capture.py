@@ -32,8 +32,11 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
+
+from anyio import to_thread
 
 from ..cc_client import CCClient
 from ..config import Settings
@@ -116,12 +119,19 @@ async def capture_query_outcome(
     result_error: str | None,
     client_name: str | None = None,
     metrics: dict[str, Any] | None = None,
+    session: str | None = None,
 ) -> None:
     """Feed one query outcome through capture and persist any distilled notes."""
     if not settings.memory_enabled:
         return
     await _record_session_event(
-        client, settings, statement, result_error, client_name=client_name, metrics=metrics
+        client,
+        settings,
+        statement,
+        result_error,
+        client_name=client_name,
+        metrics=metrics,
+        session=session,
     )
     if not settings.memory_write_enabled:
         return
@@ -163,12 +173,25 @@ def _build_event(
     *,
     client_name: str | None = None,
     metrics: dict[str, Any] | None = None,
+    session: str | None = None,
 ) -> dict[str, Any]:
+    """One episodic event row.
+
+    ``session`` is the connection the query arrived on. Distillation promotes a
+    statement after it succeeds in at least two *distinct sessions*, so stamping
+    the process id here made that criterion count gateway restarts rather than
+    independent confirmations. Callers with no connection to attribute - startup
+    maintenance, and anything off the request path - fall back to the process id,
+    which is the honest answer for them.
+
+    The statement is trimmed. It was stored raw, which left row size bounded only
+    by what an agent was willing to send.
+    """
     event: dict[str, Any] = {
         "id": f"{settings.agent_session_id}@{time.time()}-{uuid.uuid4().hex[:8]}",
         "ts": time.time(),
-        "session": settings.agent_session_id,
-        "statement": statement,
+        "session": session or settings.agent_session_id,
+        "statement": _trim(statement),
         "outcome": "error" if result_error is not None else "success",
     }
     if result_error is not None:
@@ -201,19 +224,26 @@ async def _record_session_event(
     *,
     client_name: str | None = None,
     metrics: dict[str, Any] | None = None,
+    session: str | None = None,
 ) -> None:
     """Record one episodic event: cluster first, JSONL buffer as the fallback."""
     event = _build_event(
-        settings, statement, result_error, client_name=client_name, metrics=metrics
+        settings,
+        statement,
+        result_error,
+        client_name=client_name,
+        metrics=metrics,
+        session=session,
     )
     if settings.memory_write_enabled:
         try:
             await _insert_event(client, settings, event)
-            await _flush_buffered_events(client, settings)
             return
         except GatewayError:
             pass
-    _append_jsonl_event(settings, event)
+    # M1: the buffer is a file, and this runs on a user's query. Off the event
+    # loop so a large directory cannot stall every other request in the process.
+    await to_thread.run_sync(partial(_append_jsonl_event, settings, event))
 
 
 async def _insert_event(client: CCClient, settings: Settings, event: dict[str, Any]) -> None:
@@ -223,8 +253,12 @@ async def _insert_event(client: CCClient, settings: Settings, event: dict[str, A
     )
 
 
-async def _flush_buffered_events(client: CCClient, settings: Settings) -> None:
+async def flush_buffered_events(client: CCClient, settings: Settings) -> None:
     """Replay events buffered while the cluster was unreachable, then drop the buffers.
+
+    Called from startup maintenance, deliberately not from the request path: the
+    replay is one INSERT per buffered line, so doing it inline made the first
+    query after an outage pay for the whole outage (M2).
 
     Every ``*.jsonl`` file in the log directory is replayed — session ids are
     per-process, so a crashed session's buffer has a different name than ours
@@ -245,7 +279,7 @@ async def _flush_buffered_events(client: CCClient, settings: Settings) -> None:
 
 async def _flush_one_buffer(client: CCClient, settings: Settings, path: Path) -> None:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = (await to_thread.run_sync(partial(path.read_text, encoding="utf-8"))).splitlines()
     except OSError:
         return
     for line in lines:
@@ -258,7 +292,7 @@ async def _flush_one_buffer(client: CCClient, settings: Settings, path: Path) ->
         event.setdefault("id", f"{event.get('session', 'buffered')}@{uuid.uuid4().hex[:8]}")
         await _insert_event(client, settings, event)
     try:
-        path.unlink()
+        await to_thread.run_sync(path.unlink)
     except OSError:
         return
 

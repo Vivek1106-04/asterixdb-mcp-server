@@ -31,9 +31,15 @@ from .memory_store import MEMORY_DATASET, scope_clause
 DECAY_AFTER_DAYS = 30.0
 
 NOTE_TYPE = "Note"
+# The store is small by design, so this is a guard rather than a working limit:
+# it fires on every startup, and "small by design" is an assumption about the
+# agents using it, not a property the code enforces.
+CANDIDATE_SCAN_LIMIT = 10_000
+
 _CANDIDATES_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m "
-    f'WHERE m.valid_to IS UNKNOWN AND m.`type` = "Note" AND {scope_clause("m")};'
+    f'WHERE m.valid_to IS UNKNOWN AND m.`type` = "Note" AND {scope_clause("m")} '
+    f"LIMIT {CANDIDATE_SCAN_LIMIT};"
 )
 _ARCHIVE_UPSERT = f"UPSERT INTO {MEMORY_DATASET} ([$row]);"
 

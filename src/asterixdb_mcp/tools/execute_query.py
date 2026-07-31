@@ -20,6 +20,7 @@ from ..egress import COLUMNAR_FLAGGED_MAX_ROWS, bound_rows_for_llm, minimized_ca
 from ..errors import ErrorType, GatewayError
 from ..plan_guard import ColumnarAdvisory, assess_columnar_scan
 from ..statement_guard import check_unsupported_functions, normalize_statement
+from ..tenant_policy import check_compiled_plan
 from . import ToolResult
 from .memory_notes import RecallState, attach_statement_notes
 
@@ -82,8 +83,16 @@ async def run_execute_query(
         validated_params = (
             validate_compiler_parameters(compiler_parameters) if compiler_parameters else None
         )
-        advisory = await _columnar_preflight(
-            client, client_context_id, effective_statement, dataverse
+        plan_envelope = await client.compile_query(
+            effective_statement,
+            client_context_id=client_context_id,
+            dataverse=dataverse,
+            emit_plan=True,
+        )
+        # Authorize before executing, off the plan we already had to compile.
+        check_compiled_plan(settings, client.principal, plan_envelope, dataverse)
+        advisory = await assess_columnar_scan(
+            client, client_context_id, plan_envelope.get("plans"), dataverse
         )
         envelope = await client.execute(
             effective_statement,
@@ -174,20 +183,6 @@ def _egress_caps(settings: Settings, advisory: ColumnarAdvisory | None) -> tuple
     if advisory is None:
         return settings.max_rows_to_llm, settings.max_bytes_to_llm
     return minimized_caps(settings.max_rows_to_llm, settings.max_bytes_to_llm)
-
-
-async def _columnar_preflight(
-    client: CCClient, ccid: str, statement: str, dataverse: str | None
-) -> ColumnarAdvisory | None:
-    """Compile-only the statement and flag an unrestricted columnar full scan.
-
-    A compile failure here yields no plan (no advisory); the subsequent real
-    execute surfaces the actual compile error to the caller.
-    """
-    plan_env = await client.compile_query(
-        statement, client_context_id=ccid, dataverse=dataverse, emit_plan=True
-    )
-    return await assess_columnar_scan(client, ccid, plan_env.get("plans"), dataverse)
 
 
 def _summarize(structured: dict[str, Any]) -> str:
