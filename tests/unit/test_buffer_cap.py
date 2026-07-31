@@ -154,3 +154,12 @@ async def test_buffer_writes_do_not_block_the_event_loop(tmp_path: Path) -> None
     source = inspect.getsource(memory_capture._record_session_event)
 
     assert "to_thread" in source
+
+
+async def test_a_gateway_with_no_buffer_directory_has_nothing_to_drain() -> None:
+    settings = Settings(cc_base_url="http://test-cc:19002", agent_session_id="sess-test")
+    cap = make_capturing_cc(settings, principal="tenant-a")
+
+    await memory_capture.flush_buffered_events(cap.client, settings)
+
+    assert cap.requests == []
