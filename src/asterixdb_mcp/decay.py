@@ -26,14 +26,15 @@ from typing import Any
 from .cc_client import CCClient
 from .config import Settings
 from .context_id import make_client_context_id
+from .memory_store import MEMORY_DATASET
 
 DECAY_AFTER_DAYS = 30.0
 
 NOTE_TYPE = "Note"
 _CANDIDATES_QUERY = (
-    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.valid_to IS UNKNOWN AND m.`type` = "Note";'
+    f'SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.valid_to IS UNKNOWN AND m.`type` = "Note";'
 )
-_ARCHIVE_UPSERT = "UPSERT INTO AgentMemory.Memory ([$row]);"
+_ARCHIVE_UPSERT = f"UPSERT INTO {MEMORY_DATASET} ([$row]);"
 
 
 def is_decay_candidate(row: dict[str, Any], now: datetime) -> bool:

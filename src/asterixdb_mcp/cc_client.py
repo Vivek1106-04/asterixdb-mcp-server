@@ -23,6 +23,7 @@ import httpx
 from .config import Settings
 from .egress import enforce_byte_ceiling, format_timeout
 from .errors import ErrorType, GatewayError, classify_cc_error
+from .memory_store import BOOTSTRAP_STATEMENTS, MEMORY_WRITE_PREFIXES
 
 QUERY_SERVICE_PATH = "/query/service"
 ADMIN_VERSION_PATH = "/admin/version"
@@ -44,11 +45,7 @@ HYRACKS_JOB_FORMAT_JSON = "json"
 
 # the only statement shapes the memory write path will pass through: the
 # concept store plus the episodic session-event record (insert-only)
-_MEMORY_WRITE_PREFIXES = (
-    "INSERT INTO AgentMemory.Memory",
-    "UPSERT INTO AgentMemory.Memory",
-    "INSERT INTO AgentMemory.SessionEvent",
-)
+_MEMORY_WRITE_PREFIXES = MEMORY_WRITE_PREFIXES
 
 
 def _memory_bootstrap_statements() -> frozenset[str]:
@@ -59,8 +56,6 @@ def _memory_bootstrap_statements() -> frozenset[str]:
     general DDL capability. Imported lazily to avoid a module cycle
     (okf_walk imports CCClient).
     """
-    from .okf_walk import BOOTSTRAP_STATEMENTS
-
     return frozenset(BOOTSTRAP_STATEMENTS)
 
 

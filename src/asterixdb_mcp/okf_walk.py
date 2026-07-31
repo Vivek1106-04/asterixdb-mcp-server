@@ -28,33 +28,20 @@ from typing import Any
 from .cc_client import CCClient
 from .config import Settings
 from .context_id import make_client_context_id
+from .memory_store import BOOTSTRAP_STATEMENTS, MEMORY_DATASET, SELF_DATAVERSE
+
+# Both are part of this module's public surface historically; re-exported so
+# existing importers keep working now that the store owns them.
+__all__ = ["BOOTSTRAP_STATEMENTS", "SELF_DATAVERSE"]
 
 KIND = "semantic"
-# the store itself must not be part of the knowledge it stores
-SELF_DATAVERSE = "AgentMemory"
-
-# Idempotent store DDL. Kept as exact canonical strings: the CC client's memory
-# write path allows precisely these statements (byte-for-byte) and nothing else
-# beyond INSERT/UPSERT, so automatic bootstrap cannot become a DDL side door.
-BOOTSTRAP_STATEMENTS = (
-    "CREATE DATAVERSE AgentMemory IF NOT EXISTS;",
-    "CREATE TYPE AgentMemory.MemoryType IF NOT EXISTS AS OPEN { id: string };",
-    "CREATE DATASET AgentMemory.Memory(MemoryType) IF NOT EXISTS PRIMARY KEY id;",
-    "CREATE INDEX memSubject IF NOT EXISTS ON AgentMemory.Memory(subject: string?) ENFORCED;",
-    "CREATE INDEX memText IF NOT EXISTS ON AgentMemory.Memory(`text`: string?) "
-    "TYPE FULLTEXT ENFORCED;",
-    # episodic query-outcome events the gateway records for distillation
-    "CREATE TYPE AgentMemory.SessionEventType IF NOT EXISTS AS OPEN { id: string };",
-    "CREATE DATASET AgentMemory.SessionEvent(SessionEventType) IF NOT EXISTS PRIMARY KEY id;",
-)
-
 WALK_QUERY = 'SET `import-private-functions` "true"; SELECT VALUE c FROM okf_catalog({args}) c;'
 CURRENT_ROWS_QUERY = (
-    'SELECT VALUE m FROM AgentMemory.Memory m WHERE m.kind = "{kind}" AND m.valid_to IS UNKNOWN;'
+    f'SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.kind = "{{kind}}" AND m.valid_to IS UNKNOWN;'
 )
 
-_UPSERT_ROW = "UPSERT INTO AgentMemory.Memory ([$row]);"
-_INSERT_ROW = "INSERT INTO AgentMemory.Memory ([$row]);"
+_UPSERT_ROW = f"UPSERT INTO {MEMORY_DATASET} ([$row]);"
+_INSERT_ROW = f"INSERT INTO {MEMORY_DATASET} ([$row]);"
 
 _BACKTICKED = re.compile(r"`([^`]+)`")
 

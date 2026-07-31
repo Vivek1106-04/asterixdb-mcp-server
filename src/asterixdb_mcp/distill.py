@@ -32,7 +32,7 @@ from .cc_client import CCClient
 from .config import Settings
 from .context_id import make_client_context_id
 from .errors import GatewayError
-from .tools.memory_capture import SESSION_EVENT_DATASET
+from .memory_store import SESSION_EVENT_DATASET
 from .tools.memory_notes import subjects_from_statement
 from .tools.memory_write import run_memory_write
 

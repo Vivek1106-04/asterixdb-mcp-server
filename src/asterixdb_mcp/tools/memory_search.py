@@ -43,7 +43,7 @@ MAX_LINK_DEPTH = 2
 # fetch window for the full-text pass before client-side ranking
 FT_FETCH_WINDOW = 100
 
-MEMORY_DATASET = "AgentMemory.Memory"
+from ..memory_store import MEMORY_DATASET  # noqa: E402  re-exported
 
 # Concept identities are engine-emitted (dv.ds, dv.ds/index/x, dv/type/T ...):
 # letters, digits and a small punctuation set. Anything else is rejected so no

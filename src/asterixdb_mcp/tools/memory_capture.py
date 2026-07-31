@@ -45,7 +45,8 @@ from .memory_write import run_memory_write
 MAX_CAPTURED_STATEMENT_LEN = 300
 MAX_WARNING_LEN = 200
 
-SESSION_EVENT_DATASET = "AgentMemory.SessionEvent"
+from ..memory_store import SESSION_EVENT_DATASET  # noqa: E402  re-exported
+
 _EVENT_INSERT = f"INSERT INTO {SESSION_EVENT_DATASET} ([$row]);"
 
 # CC metrics report durations as strings like "377.644875ms" or "2.233s".

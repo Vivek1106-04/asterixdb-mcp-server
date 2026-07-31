@@ -49,9 +49,10 @@ from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
+from ..memory_store import MEMORY_DATASET
 from . import ToolResult
 from .memory_notes import reinforce_notes
-from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
+from .memory_search import _IDENTIFIER_RE
 
 MAX_TEXT_LEN = 4000
 MAX_LINKS = 16

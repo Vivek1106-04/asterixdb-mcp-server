@@ -19,9 +19,10 @@ from typing import Any
 from ..cc_client import CCClient
 from ..config import Settings
 from ..errors import GatewayError
+from ..memory_store import MEMORY_DATASET
 from ..staleness import SUSPECT_LABEL, check_rows, is_suspect, render_warning
 from . import ToolResult
-from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
+from .memory_search import _IDENTIFIER_RE
 
 MAX_NOTE_SUBJECTS = 4
 MAX_NOTE_LEN = 500

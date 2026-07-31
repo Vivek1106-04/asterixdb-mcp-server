@@ -35,8 +35,9 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
+from ..memory_store import MEMORY_DATASET
 from . import ToolResult
-from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
+from .memory_search import _IDENTIFIER_RE
 
 PREFERENCE_TYPE = "Preference"
 PREFERENCE_KIND = "preference"
