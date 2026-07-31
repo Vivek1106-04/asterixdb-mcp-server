@@ -43,6 +43,7 @@ from .decay import run_decay
 from .distill import run_distill
 from .errors import GatewayError
 from .identity import resolve_principal
+from .migrate import backfill_principals
 from .okf_walk import bootstrap_store, run_walk
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,9 @@ async def _maintenance_pass(settings: Settings) -> None:
         client = CCClient(settings, http).for_principal(resolve_principal(settings))
         ccid = make_client_context_id(settings.agent_session_id, "maintenance")
         await _step("bootstrap", bootstrap_store(client, ccid))
+        # Before anything reads the store: rows written before tenant scoping
+        # carry no owner, and every read now filters on one.
+        await _step("backfill", _log_summary("backfill", backfill_principals(client, settings)))
         await _step("walk", _log_summary("walk", run_walk(client, settings)))
         await _step("decay", _log_summary("decay", run_decay(client, settings)))
         await _step("distill", _log_summary("distill", run_distill(client, settings)))

@@ -522,11 +522,14 @@ than as an unsolicited patch.
 2. **Is engine-level authorization on any roadmap?** If yes, we should align the
    gateway's principal model to it now rather than build a second one.
 3. **Tenancy granularity:** is a tenant an OAuth `client_id`, an end user (`sub`),
-   or an org claim? This changes the memory schema, and it is cheapest to decide
-   before Phase 3 writes data.
+   or an org claim? Phase 3 ships `client_id`, because it is the claim every
+   verified token carries. Changing it later is a one-line change in identity
+   resolution plus a re-run of the ownership backfill, not a schema change.
 4. **Memory store placement:** one shared `AgentMemory` dataverse with a principal
    filter, or one dataverse per tenant? Per-tenant gives stronger isolation;
-   shared gives cross-tenant distillation of genuinely general facts.
+   shared gives cross-tenant distillation of genuinely general facts. Phase 3
+   ships the shared form, with a single accessor module as the only place that
+   names the datasets — so moving to a dataverse per tenant stays mechanical.
 5. **Is the token result (cost, not correctness) the right thing to optimize** for
    the project's goals? If yes, the tool-schema tax is the next largest lever and
    worth a design pass.

@@ -49,7 +49,7 @@ from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
 from ..inventory import dataset_names, dataverse_names, fetch_dataset_rows
-from ..memory_store import MEMORY_DATASET
+from ..memory_store import MEMORY_DATASET, scope_clause
 from . import ToolResult
 from .memory_notes import reinforce_notes
 from .memory_search import _IDENTIFIER_RE
@@ -71,7 +71,8 @@ NEAR_DUP_THRESHOLD = 0.8
 DUP_PREVIEW_LEN = 160
 
 _CURRENT_QUERY = (
-    f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = $subject AND m.valid_to IS UNKNOWN;"
+    f"SELECT VALUE m FROM {MEMORY_DATASET} m "
+    f"WHERE m.subject = $subject AND m.valid_to IS UNKNOWN AND {scope_clause('m')};"
 )
 # the engine binds $row as an object; the array constructor around it is
 # statement text because a bound array is not accepted as an INSERT body
@@ -149,7 +150,7 @@ async def run_memory_write(
     original_subject = subject
     subject = await _canonicalize_subject(client, ccid, subject)
     try:
-        envelope = await client.execute(
+        envelope = await client.execute_memory_read(
             _CURRENT_QUERY, client_context_id=ccid, statement_parameters={"subject": subject}
         )
         rows = [row for row in envelope.get("results", []) if isinstance(row, dict)]

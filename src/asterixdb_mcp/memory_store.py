@@ -36,6 +36,8 @@ MEMORY_WRITE_PREFIXES = (
     "INSERT INTO AgentMemory.Memory",
     "UPSERT INTO AgentMemory.Memory",
     "INSERT INTO AgentMemory.SessionEvent",
+    # only the ownership backfill rewrites an event, and only in place
+    "UPSERT INTO AgentMemory.SessionEvent",
 )
 
 # Idempotent store DDL. Kept as exact canonical strings: the CC client's memory
@@ -61,9 +63,24 @@ BOOTSTRAP_STATEMENTS = (
 # The field every row carries, naming the tenant it belongs to.
 PRINCIPAL_FIELD = "principal"
 
+# The SQL++ named parameter the tenant is bound to. The write path binds it from
+# the client's own identity, so every memory query spells it the same way.
+PRINCIPAL_PARAMETER = f"${PRINCIPAL_FIELD}"
+
 # The shared tier. Deliberately a character that cannot appear in an OAuth
 # client_id, so no tenant can ever authenticate as the global reader.
 GLOBAL_PRINCIPAL = "*"
+
+
+# The one pair of memory reads that must NOT be tenant-scoped: they find rows
+# written before the store had owners at all. Restricting them to unowned rows
+# is what keeps that safe — a row nobody owns cannot be somebody else's.
+UNOWNED_MEMORY_QUERY = (
+    f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.{PRINCIPAL_FIELD} IS UNKNOWN;"
+)
+UNOWNED_EVENT_QUERY = (
+    f"SELECT VALUE e FROM {SESSION_EVENT_DATASET} e WHERE e.{PRINCIPAL_FIELD} IS UNKNOWN;"
+)
 
 
 def tag(row: dict[str, Any], principal: str) -> dict[str, Any]:
@@ -88,4 +105,4 @@ def scope_clause(alias: str) -> str:
     injection vector.
     """
     field = f"{alias}.{PRINCIPAL_FIELD}"
-    return f'({field} = $principal OR {field} = "{GLOBAL_PRINCIPAL}")'
+    return f'({field} = {PRINCIPAL_PARAMETER} OR {field} = "{GLOBAL_PRINCIPAL}")'

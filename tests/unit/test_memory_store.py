@@ -6,6 +6,7 @@ read them. The last test here is the one that keeps it that way.
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 from asterixdb_mcp import memory_store
@@ -13,6 +14,7 @@ from asterixdb_mcp.memory_store import (
     GLOBAL_PRINCIPAL,
     MEMORY_DATASET,
     PRINCIPAL_FIELD,
+    SELF_DATAVERSE,
     SESSION_EVENT_DATASET,
     scope_clause,
     tag,
@@ -71,6 +73,47 @@ def test_global_principal_is_not_a_legal_client_id() -> None:
     # A tenant that could authenticate as GLOBAL_PRINCIPAL would read every
     # tenant's rows, so it must not be a value an OAuth client_id can take.
     assert GLOBAL_PRINCIPAL == "*"
+
+
+def _memory_statements() -> list[tuple[str, str, str]]:
+    """(module, attribute, statement) for every memory statement the code holds."""
+    package = Path(memory_store.__file__).parent
+    root = memory_store.__name__.rsplit(".", 1)[0]
+    found: list[tuple[str, str, str]] = []
+    for path in sorted(package.rglob("*.py")):
+        relative = path.relative_to(package).with_suffix("")
+        name = f"{root}." + ".".join(relative.parts).removesuffix(".__init__")
+        module = importlib.import_module(name)
+        for attribute, value in vars(module).items():
+            if isinstance(value, str) and SELF_DATAVERSE + "." in value:
+                found.append((name, attribute, value))
+    return found
+
+
+def test_every_stored_memory_query_is_scoped_to_one_tenant() -> None:
+    # Option A puts nothing between one tenant's rows and another's but the
+    # predicate on the read. A query that names a memory dataset and forgets it
+    # returns every tenant's rows.
+    unscoped = [
+        f"{module}.{attribute}"
+        for module, attribute, statement in _memory_statements()
+        if statement.lstrip().upper().startswith("SELECT")
+        and "$principal" not in statement
+        # The ownership backfill is the one read that must see unowned rows.
+        # Restricting it to them is what makes it safe: a row nobody owns
+        # cannot be another tenant's.
+        and f"{PRINCIPAL_FIELD} IS UNKNOWN" not in statement
+    ]
+
+    assert unscoped == [], f"these memory queries read across every tenant: {unscoped}"
+
+
+def test_the_statement_scan_actually_finds_the_queries_it_checks() -> None:
+    # The test above passes vacuously if the scan finds nothing, so pin it to a
+    # query that must always be there.
+    assert any(attribute == "CURRENT_ROWS_QUERY" for _, attribute, _ in _memory_statements()), (
+        "the memory-statement scan found no queries; the check above proves nothing"
+    )
 
 
 def test_only_the_store_module_names_the_memory_datasets() -> None:

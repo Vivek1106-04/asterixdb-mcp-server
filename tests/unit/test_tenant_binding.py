@@ -16,12 +16,13 @@ import pytest
 
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.errors import ErrorType, GatewayError
-from asterixdb_mcp.memory_store import BOOTSTRAP_STATEMENTS, PRINCIPAL_FIELD
+from asterixdb_mcp.memory_store import BOOTSTRAP_STATEMENTS, PRINCIPAL_FIELD, scope_clause
 from tests.conftest import CapturingCC, make_capturing_cc
 
 pytestmark = pytest.mark.anyio
 
 _INSERT = "INSERT INTO AgentMemory.Memory ([$row]);"
+_SCOPED_SELECT = f"SELECT VALUE m FROM AgentMemory.Memory m WHERE {scope_clause('m')};"
 
 
 @pytest.fixture
@@ -135,6 +136,58 @@ async def test_a_non_dict_row_parameter_is_left_alone(write_settings: Settings) 
     )
 
     assert json.loads(parse_qs(cap.requests[-1].content.decode())["$row"][0]) == "not-an-object"
+
+
+# reads
+
+
+async def test_a_memory_read_binds_the_tenant_from_the_client(write_settings: Settings) -> None:
+    cap = make_capturing_cc(write_settings, principal="tenant-a")
+
+    await cap.client.execute_memory_read(_SCOPED_SELECT, client_context_id="sess::t::1")
+
+    form = parse_qs(cap.requests[-1].content.decode())
+    assert json.loads(form["$principal"][0]) == "tenant-a"
+
+
+async def test_a_caller_cannot_read_as_another_tenant(write_settings: Settings) -> None:
+    # The tenant comes from the client's identity, never from the parameters a
+    # caller passes, so a supplied principal is overwritten rather than honoured.
+    cap = make_capturing_cc(write_settings, principal="tenant-a")
+
+    await cap.client.execute_memory_read(
+        _SCOPED_SELECT,
+        client_context_id="sess::t::1",
+        statement_parameters={PRINCIPAL_FIELD: "tenant-b"},
+    )
+
+    form = parse_qs(cap.requests[-1].content.decode())
+    assert json.loads(form["$principal"][0]) == "tenant-a"
+
+
+async def test_an_unbound_client_refuses_to_read_memory(write_settings: Settings) -> None:
+    cap = make_capturing_cc(write_settings, principal=None)
+
+    with pytest.raises(GatewayError) as excinfo:
+        await cap.client.execute_memory_read(_SCOPED_SELECT, client_context_id="sess::t::1")
+
+    assert excinfo.value.error_type is ErrorType.INTERNAL
+    assert cap.requests == []
+
+
+async def test_a_query_that_forgets_the_tenant_predicate_is_refused(
+    write_settings: Settings,
+) -> None:
+    # Isolation is logical, so an unfiltered query reads every tenant's rows.
+    cap = make_capturing_cc(write_settings, principal="tenant-a")
+
+    with pytest.raises(GatewayError) as excinfo:
+        await cap.client.execute_memory_read(
+            "SELECT VALUE m FROM AgentMemory.Memory m;", client_context_id="sess::t::1"
+        )
+
+    assert excinfo.value.error_type is ErrorType.INTERNAL
+    assert cap.requests == []
 
 
 # every path that writes memory, checked end to end

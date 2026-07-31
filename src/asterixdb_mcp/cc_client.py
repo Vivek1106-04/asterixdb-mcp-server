@@ -23,7 +23,13 @@ import httpx
 from .config import Settings
 from .egress import enforce_byte_ceiling, format_timeout
 from .errors import ErrorType, GatewayError, classify_cc_error
-from .memory_store import BOOTSTRAP_STATEMENTS, MEMORY_WRITE_PREFIXES, tag
+from .memory_store import (
+    BOOTSTRAP_STATEMENTS,
+    MEMORY_WRITE_PREFIXES,
+    PRINCIPAL_FIELD,
+    PRINCIPAL_PARAMETER,
+    tag,
+)
 
 QUERY_SERVICE_PATH = "/query/service"
 ADMIN_VERSION_PATH = "/admin/version"
@@ -202,6 +208,41 @@ class CCClient:
         envelope = await self._post_query(form)
         self._raise_on_envelope_error(envelope)
         return envelope
+
+    async def execute_memory_read(
+        self,
+        statement: str,
+        *,
+        client_context_id: str,
+        statement_parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run one read against the agentic-memory store, scoped to this tenant.
+
+        Isolation in the store is logical, so a memory query that forgets its
+        principal predicate reads every tenant's rows. That is not something to
+        leave to review: the tenant is bound here from the client's own identity
+        (never from anything a caller passes), and a statement that does not
+        reference it is refused rather than run.
+        """
+        if self._principal is None:
+            raise GatewayError(
+                ErrorType.INTERNAL,
+                "Refusing to read memory from a client that is not bound to a tenant.",
+            )
+        if PRINCIPAL_PARAMETER not in statement:
+            raise GatewayError(
+                ErrorType.INTERNAL,
+                f"Refusing to run a memory query that does not filter on "
+                f"{PRINCIPAL_PARAMETER}; it would read every tenant's rows.",
+            )
+        return await self.execute(
+            statement,
+            client_context_id=client_context_id,
+            statement_parameters={
+                **(statement_parameters or {}),
+                PRINCIPAL_FIELD: self._principal,
+            },
+        )
 
     async def submit_async(
         self,

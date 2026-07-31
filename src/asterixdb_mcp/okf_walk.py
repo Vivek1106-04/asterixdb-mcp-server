@@ -28,7 +28,12 @@ from typing import Any
 from .cc_client import CCClient
 from .config import Settings
 from .context_id import make_client_context_id
-from .memory_store import BOOTSTRAP_STATEMENTS, MEMORY_DATASET, SELF_DATAVERSE
+from .memory_store import (
+    BOOTSTRAP_STATEMENTS,
+    MEMORY_DATASET,
+    SELF_DATAVERSE,
+    scope_clause,
+)
 
 # Both are part of this module's public surface historically; re-exported so
 # existing importers keep working now that the store owns them.
@@ -37,7 +42,8 @@ __all__ = ["BOOTSTRAP_STATEMENTS", "SELF_DATAVERSE"]
 KIND = "semantic"
 WALK_QUERY = 'SET `import-private-functions` "true"; SELECT VALUE c FROM okf_catalog({args}) c;'
 CURRENT_ROWS_QUERY = (
-    f'SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.kind = "{{kind}}" AND m.valid_to IS UNKNOWN;'
+    f"SELECT VALUE m FROM {MEMORY_DATASET} m "
+    f'WHERE m.kind = "{{kind}}" AND m.valid_to IS UNKNOWN AND {scope_clause("m")};'
 )
 
 _UPSERT_ROW = f"UPSERT INTO {MEMORY_DATASET} ([$row]);"
@@ -170,7 +176,9 @@ async def fetch_bundle(client: CCClient, ccid: str) -> dict[str, dict[str, Any]]
 
 async def fetch_current(client: CCClient, ccid: str) -> dict[str, dict[str, Any]]:
     """Current walk-kind rows in the store, keyed by subject."""
-    envelope = await client.execute(CURRENT_ROWS_QUERY.format(kind=KIND), client_context_id=ccid)
+    envelope = await client.execute_memory_read(
+        CURRENT_ROWS_QUERY.format(kind=KIND), client_context_id=ccid
+    )
     return {
         row["subject"]: row
         for row in envelope.get("results", [])

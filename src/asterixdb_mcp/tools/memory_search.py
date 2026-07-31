@@ -43,7 +43,7 @@ MAX_LINK_DEPTH = 2
 # fetch window for the full-text pass before client-side ranking
 FT_FETCH_WINDOW = 100
 
-from ..memory_store import MEMORY_DATASET  # noqa: E402  re-exported
+from ..memory_store import MEMORY_DATASET, scope_clause  # noqa: E402  re-exported
 
 # Concept identities are engine-emitted (dv.ds, dv.ds/index/x, dv/type/T ...):
 # letters, digits and a small punctuation set. Anything else is rejected so no
@@ -51,7 +51,7 @@ from ..memory_store import MEMORY_DATASET  # noqa: E402  re-exported
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.@/-]+$")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
-_CURRENT = "m.valid_to IS UNKNOWN"
+_CURRENT = f"m.valid_to IS UNKNOWN AND {scope_clause('m')}"
 
 _SUBJECT_QUERY = (
     f'SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = "__SUBJECT__" AND {_CURRENT};'
@@ -166,7 +166,7 @@ async def run_memory_search(
 async def _fetch(client: CCClient, ccid: str, statement: str) -> list[dict[str, Any]]:
     """Run one read; a failed pass degrades to no results instead of failing the blend."""
     try:
-        envelope = await client.execute(statement, client_context_id=ccid)
+        envelope = await client.execute_memory_read(statement, client_context_id=ccid)
     except GatewayError:
         return []
     return [row for row in envelope.get("results", []) if isinstance(row, dict)]
