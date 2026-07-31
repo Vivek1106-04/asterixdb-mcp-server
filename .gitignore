@@ -18,12 +18,6 @@ env/
 .coverage
 htmlcov/
 
-# Generated artifacts
-# graphify's knowledge graph of this repo: derived entirely from the working
-# tree, rebuilt on demand, and large enough that committing it would swamp
-# every real diff.
-graphify-out/
-
 # Local config / secrets
 .env
 .env.*

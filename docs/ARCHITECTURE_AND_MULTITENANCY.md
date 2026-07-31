@@ -11,12 +11,16 @@
 The gateway is an MCP server that lets an LLM agent query AsterixDB safely. It is
 built, tested, and running. Three things are worth the team's time today:
 
-1. **Multi-tenancy is not implemented.** The gateway authenticates callers and then
-   discards their identity. Four separate planes are affected, one of which writes
-   incorrect data under concurrency.
-2. **All four planes can be closed on the gateway side.** The MCP specification's
-   own authorization model puts tenancy at the server, not the database. We need
-   **no engine changes** for the prototype. We do need one deployment guarantee.
+1. **The threat model is the autonomous agent, not the human user.** Human access
+   to the CC on 19002 is unchanged and out of scope; engine-level authorization is
+   not what this is. The gateway is a parallel, AI-only path that verifies OAuth 2.1
+   JWTs, isolates tenants, and caps what an agent can consume ([§5.1](#51-threat-model)).
+2. **Three of the four tenancy planes are now closed, on the gateway side alone.**
+   Identity, per-connection state, and memory data all carry the caller's principal;
+   only cluster-level scoping (Phase 4) and per-tenant quotas (Phase 5) remain. The
+   MCP specification's own authorization model puts tenancy at the server, not the
+   database, so this needed **no engine changes**. It does need one deployment
+   guarantee: an agent's network must not reach 19002 directly.
 3. **Memory saves tokens, not correctness.** Measured: −29.4% input tokens. The
    saving comes almost entirely from *fewer turns*, not smaller turns. This changes
    what we should optimize next.
@@ -197,56 +201,109 @@ The second one is our current state. Which brings us to the gap.
 
 ---
 
-## 5. The multi-tenancy gap
+## 5. Threat model and the multi-tenancy gap
 
-### 5.1 Precise statement
+### 5.1 Threat model
 
-The gateway verifies who you are and then throws that away. `grep get_access_token src/ tests/`
-returns **zero hits**.
+Scoping this precisely matters, because the gateway is often read as an attempt to
+retrofit security onto an engine that has none. It is not.
 
-Four planes are affected:
+**What we are not solving.** AsterixDB has no native authentication or
+authorization, and closing that is a project-level decision with a permanent public
+API attached. Human users — engineers, BI tools, existing pipelines — keep
+connecting to the CC directly on 19002 across a trusted internal boundary. That
+access path is unchanged and out of scope here. We are not building a human
+authorization layer, and nothing in this document should be read as one.
+
+**What we are solving.** The gateway exists to proxy *AI* traffic safely, on a path
+parallel to human access. The threat is not a malicious human; it is the ordinary
+behaviour of an autonomous LLM agent: non-deterministic, occasionally
+catastrophically wrong about scale, and — uniquely — steerable by the data it
+reads. Prompt injection is not an edge case here. Query results are attacker-
+influenced input that the model treats as instructions, so every control below is
+containment for an agent that has been successfully talked into something.
+
+| Actor | Trust | Path | In scope |
+|---|---|---|---|
+| Human engineer, BI tool | Trusted | Direct to CC :19002 | No |
+| AI agent (model + MCP client) | Semi-trusted, holds an OAuth 2.1 JWT | Through the gateway | **Yes** |
+| Data the agent reads | Untrusted | Returned rows the model may obey | **Yes** |
+
+**Assets:** cluster data (confidentiality), cluster compute and availability, and
+the memory store — which is both an asset and an attack surface, since it is the
+one thing an agent can durably write.
+
+The agent failure modes we accept responsibility for, and what answers each:
+
+| # | Failure mode | Control | Status |
+|---|---|---|---|
+| T1 | Runaway scan or loop exhausts the cluster | `readonly=true` + CC `timeout` + row/byte egress caps + concurrency permits | Built |
+| T2 | Agent mutates data | `readonly=true` hardcoded on every `/query/service` call; the sole exception is the memory path, gated to `AgentMemory.*` by statement prefix and to exact-match bootstrap DDL | Built |
+| T3 | One tenant's notes reach another tenant | `principal` on every row, predicate on every read, both enforced in the client with build-failing tests (§5.2) | Built |
+| T4 | One tenant's *statement text* reaches another via shared in-process state | Per-connection scoping of capture, recall, briefing | Built |
+| T5 | Agent reads a dataverse outside its remit | Per-principal allowlist enforced on the compiled plan | **Phase 4** |
+| T6 | One tenant starves the others | Per-principal permits and quotas | **Phase 5** — pools are process-wide today |
+| T7 | Agent writes a false note a later session trusts | Provenance (`author`, `source_query`), bi-temporal history, decay, staleness detection | Partial — detection works, correction does not (§7) |
+
+T7 is worth naming explicitly because isolation does *not* address it: a poisoned
+note stays inside the tenant that wrote it, which is precisely where it does damage.
+
+**What "rate limits" means today, stated honestly.** The gateway caps rows, bytes,
+wall-clock per query, and concurrent queries. It does not cap requests per unit
+time, and the concurrency pools are shared process-wide rather than per principal.
+So T1 is bounded for any single agent, and T6 is not bounded at all. That is the
+substance of Phase 5, not a footnote to it.
+
+### 5.2 Where the gap was, and what is now closed
+
+The original finding was that the gateway verified who you are and then threw it
+away: `grep get_access_token src/` returned zero hits outside `auth.py`. Four planes
+were affected; three are now closed.
 
 ```mermaid
 flowchart TB
-    subgraph P1["Plane 1 — Identity"]
+    subgraph P1["Plane 1 — Identity (closed)"]
         I1["auth.py verifies JWT ✓"]
         I2["AccessToken(client_id, scopes) ✓"]
-        I3["...never read by any call site ✗"]
+        I3["identity.py reads it per call ✓"]
         I1 --> I2 --> I3
     end
 
-    subgraph P2["Plane 2 — In-process state"]
-        S1["CaptureState, RecallState,<br/>BriefingState, session_id"]
+    subgraph P2["Plane 2 — In-process state (closed)"]
+        S1["CaptureState, RecallState,<br/>BriefingState"]
         S2["Documented 'session-scoped'"]
-        S3["Actually process-wide singletons ✗"]
+        S3["Now one bundle per connection,<br/>held weakly ✓"]
         S1 --> S2 --> S3
     end
 
-    subgraph P3["Plane 3 — Memory data"]
+    subgraph P3["Plane 3 — Memory data (closed)"]
         D1["AgentMemory.Memory<br/>PRIMARY KEY id"]
-        D2["No principal / tenant field ✗"]
+        D2["principal on every row,<br/>predicate on every read ✓"]
         D1 --> D2
     end
 
-    subgraph P4["Plane 4 — Cluster authorization"]
+    subgraph P4["Plane 4 — Cluster authorization (open)"]
         A1["cc_client._headers()<br/>= {Accept: application/json}"]
         A2["No credential. Engine has no authz. ✗"]
         A1 --> A2
     end
 ```
 
-**Plane 2 detail — this one writes wrong data.** `CaptureState._failures` is keyed by
-*subject only*. The capture rule is "a failure, then a later success on the same
-subject, means the second statement fixed the first." Process-wide, with two
-concurrent clients, that pairs **client A's failure with client B's unrelated
-success** and persists a note asserting B's query fixes A's error. Automatic, no
-model involved, then served to everyone. It is also a cross-tenant information
-path: A's statement text lands in a note shown to B.
+**Plane 2 detail — this one wrote wrong data (T4).** `CaptureState._failures` was
+keyed by *subject only*. The capture rule is "a failure, then a later success on the
+same subject, means the second statement fixed the first." Process-wide, with two
+concurrent clients, that paired **client A's failure with client B's unrelated
+success** and persisted a note asserting B's query fixes A's error. Automatic, no
+model involved, then served to everyone — a cross-tenant information path in which
+A's statement text lands in a note shown to B.
 
 Two further consequences of the same root cause: only the **first** client ever to
-connect receives a briefing, and the **second client onward silently receives no
-memory notes at all** — which defeats the memory layer for every client except one,
+connect received a briefing, and the **second client onward silently received no
+memory notes at all** — which defeated the memory layer for every client except one,
 in the transport we actually deploy.
+
+All three now exist as named regression tests rather than as prose. The one that
+matters most is `test_one_clients_failure_is_never_paired_with_anothers_success`.
 
 **Plane 4 detail.** We verified the engine side:
 
@@ -262,21 +319,33 @@ grep -rl 'Authorization' --include='*.java' hyracks-http/src/main/java
 AsterixDB has no authentication or authorization subsystem. Every caller reaching
 the CC has full cluster privileges.
 
-### 5.2 Why this belongs in the gateway
+This is a statement of fact, not a complaint: per §5.1 it is deliberately out of
+scope, and human access continues to depend on the network boundary exactly as it
+does today. It has one consequence for us, and it is the reason §5.3's network
+policy is a requirement rather than a suggestion — the gateway cannot fall back on
+the engine to catch anything it lets through.
+
+### 5.3 Why this belongs in the gateway
 
 Not a workaround — it is the specification's intended shape. MCP defines the server
 as an OAuth 2.1 **resource server** that holds its own upstream relationship. The
 same pattern is standard elsewhere: PgBouncer, Hasura, PostgREST.
 
-It rests on one deployment guarantee:
+It rests on one deployment guarantee, and the guarantee is narrower than it first
+looks — which is what makes it deployable alongside existing human access:
 
-> **The CC must be reachable only through the gateway.** Bind to loopback or a
-> private network; the gateway is the sole ingress.
+> **The gateway must be the only route from an AI agent to the CC.** Not the only
+> route to the CC. Human engineers and BI tools keep their direct connection on
+> 19002; what has to be true is that the network the agent runs in cannot reach
+> 19002 itself.
 
-If that is violated, every control below is decoration. This is a hard requirement,
-not a recommendation, and should be documented as such.
+Stated as a network policy: agent egress is allowed to the gateway port and denied
+to 19002. If that is violated, every control in this document is decoration — an
+agent that opens its own connection to the CC has full cluster privileges, because
+the engine has no authorization to fall back on. This is a hard requirement, not a
+recommendation, and should be documented as such.
 
-### 5.3 Proposed design
+### 5.4 The design, as built
 
 Two keys, not one. Conflating them re-breaks things:
 
@@ -321,17 +390,16 @@ sequenceDiagram
 datasets the compiled plan *actually* touches, so views, subqueries, and synonyms
 cannot smuggle past a regex on statement text.
 
-### 5.4 What the SDK does *not* give us
+### 5.5 What the SDK does *not* give us
 
-Two items we own:
-
-1. **No session-end callback.** The SDK reaps its own transport and forgets. Our
-   per-session state would accumulate forever. Keying by session is not enough —
-   we must add TTL/LRU eviction, or C1–C4 become a memory leak instead of a
-   correctness bug.
+1. **No session-end callback.** The SDK reaps its own transport and forgets, so
+   per-session state keyed by session id would accumulate forever. *Resolved:*
+   scopes are held in a `WeakKeyDictionary` against the SDK's own session object,
+   so a finished connection releases its state with no TTL, no LRU, and no sweep.
+   The eviction policy is the garbage collector.
 2. **`session_idle_timeout` is unset.** Our `streamable_http_app()` call passes
    host, path, and transport security — no idle timeout. Default is `None` = never
-   reaped. SDK docs recommend `1800`.
+   reaped. SDK docs recommend `1800`. *Still open.*
 
 ---
 
@@ -429,20 +497,20 @@ shapes* — thousands, not millions — and distillation only ever wanted aggreg
 
 ```mermaid
 flowchart LR
-    P1["Phase 1<br/>Principal + session<br/>derivation"] --> P2["Phase 2<br/>Key state by<br/>(principal, session)<br/>+ TTL eviction"]
-    P2 --> P3["Phase 3<br/>principal field on<br/>memory rows<br/>+ filtered reads"]
+    P1["Phase 1 ✓<br/>Principal + session<br/>derivation"] --> P2["Phase 2 ✓<br/>Key state by<br/>(principal, session)<br/>held weakly"]
+    P2 --> P3["Phase 3 ✓<br/>principal field on<br/>memory rows<br/>+ filtered reads"]
     P3 --> P4["Phase 4<br/>Per-principal<br/>dataverse allowlist<br/>in plan_guard"]
     P4 --> P5["Phase 5<br/>Per-principal pools<br/>+ quotas"]
     P2 -.-> H["H1–H5 scaling fixes<br/>(independent track)"]
 ```
 
-| Phase | Closes | Engine change | Note |
-|---|---|---|---|
-| 1 | foundation | none | `_principal(ctx)`, `_session_key(ctx)` |
-| 2 | C1, C2, **C3**, C4 | none | + `session_idle_timeout=1800` |
-| 3 | Plane 3 | none | **changes stored data — needs migration; do before production data exists** |
-| 4 | Plane 4 (policy) | none | enforced on compiled plan |
-| 5 | noisy neighbor | none | |
+| Phase | Closes | Engine change | Status | Note |
+|---|---|---|---|---|
+| 1 | foundation | none | **done** | `identity.py` — principal from the verified token, session from the SDK's own object |
+| 2 | C1, C2, **C3**, C4 (T4) | none | **done** | `scopes.py`; weak refs made TTL eviction unnecessary. `session_idle_timeout=1800` still outstanding |
+| 3 | Plane 3 (T3) | none | **done** | changes stored data; the ownership backfill adopts pre-existing rows on first boot |
+| 4 | Plane 4 (T5) | none | next | enforced on the compiled plan, not statement text |
+| 5 | noisy neighbor (T6) | none | next | pools are process-wide today, so T6 is currently unbounded |
 
 **Every phase is gateway-side.** The full end-to-end multi-tenant prototype is
 achievable with zero engine changes.
@@ -552,5 +620,5 @@ Every claim above is checkable:
 | Memory schema, no principal | `okf_walk.py:41-48` |
 | SDK session↔credential binding | `mcp/server/streamable_http_manager.py:107-110` |
 | `session_idle_timeout` unset | `http_app.py:181` |
-| Engine has no auth surface | grep commands in §5.1 |
+| Engine has no auth surface | grep commands in §5.2 |
 | Columnar egress tightening | `egress.py:43-49` |
