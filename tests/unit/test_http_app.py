@@ -85,6 +85,33 @@ def test_build_http_app_bearer_protects_mcp(monkeypatch: pytest.MonkeyPatch) -> 
         assert client.get("/mcp").status_code == 401
 
 
+def test_idle_sessions_are_reaped() -> None:
+    # Per-connection state is released when the SDK drops the session object, so
+    # without an idle deadline the SDK never drops it and nothing is ever
+    # released. The timeout is what makes per-connection scoping real.
+    settings = Settings(transport="http", auth_mode="none")
+    mcp = server_module.build_server(settings)
+
+    build_http_app(mcp, settings)
+
+    assert mcp.session_manager.session_idle_timeout == settings.session_idle_timeout_s
+
+
+def test_the_idle_reaper_can_be_turned_off_explicitly() -> None:
+    # An operator who wants sessions to live until the client disconnects has to
+    # say so; the SDK spells that None, and rejects a non-positive timeout.
+    settings = Settings(transport="http", auth_mode="none", session_idle_timeout_s=0)
+    mcp = server_module.build_server(settings)
+
+    build_http_app(mcp, settings)
+
+    assert mcp.session_manager.session_idle_timeout is None
+
+
+def test_the_default_idle_timeout_is_the_sdk_recommendation() -> None:
+    assert Settings().session_idle_timeout_s == 1800.0
+
+
 def test_build_http_app_none_warns_and_serves_health(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

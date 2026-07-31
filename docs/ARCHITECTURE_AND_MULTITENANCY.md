@@ -184,7 +184,7 @@ The gateway migrated to SDK 2.x. The relevant changes:
 | **OAuth 2.1 resource-server model** | `auth.py` verifies bearer JWTs against the AS's JWKS: issuer, audience (RFC 8707), expiry, scopes. Gateway never issues or stores tokens. |
 | **Per-call `Context` injection** | No ambient `get_context()`. Every tool takes `ctx` explicitly — identity belongs to the *call*, not the process. This is what makes per-tenant state possible at all. |
 | **Session ↔ credential binding** | SDK tracks `_session_owners: dict[str, AuthorizationContext]`; a session can only be used by the credential that created it. Cross-tenant session hijacking is blocked at transport level, free. |
-| **`session_idle_timeout`** | Idle sessions reaped automatically. **We do not currently set this** — see §7. |
+| **`session_idle_timeout`** | Idle sessions reaped automatically. Set to `1800`; it is what releases a connection's scoped state, so it is load-bearing rather than housekeeping. |
 | **`version` in `serverInfo`** | Clients can distinguish gateway builds. |
 | **Structured tool output** | Tools return typed structured content alongside text; the model gets a schema, not prose. |
 | **Transport security settings** | Host binding + DNS-rebinding allowlist as transport args (`build_transport_security`). |
@@ -237,12 +237,12 @@ The agent failure modes we accept responsibility for, and what answers each:
 
 | # | Failure mode | Control | Status |
 |---|---|---|---|
-| T1 | Runaway scan or loop exhausts the cluster | `readonly=true` + CC `timeout` + row/byte egress caps + concurrency permits | Built |
+| T1 | Runaway scan or loop exhausts the cluster | `readonly=true` + CC `timeout` + row/byte egress caps + concurrency permits + a byte budget on the offline event buffer | Built |
 | T2 | Agent mutates data | `readonly=true` hardcoded on every `/query/service` call; the sole exception is the memory path, gated to `AgentMemory.*` by statement prefix and to exact-match bootstrap DDL | Built |
 | T3 | One tenant's notes reach another tenant | `principal` on every row, predicate on every read, both enforced in the client with build-failing tests (§5.2) | Built |
 | T4 | One tenant's *statement text* reaches another via shared in-process state | Per-connection scoping of capture, recall, briefing | Built |
 | T5 | Agent reads a dataverse outside its remit | Per-principal allowlist enforced on the compiled plan | **Phase 4** |
-| T6 | One tenant starves the others | Per-principal permits and quotas | **Phase 5** — pools are process-wide today |
+| T6 | One tenant starves the others | Two-level permits: a global ceiling the cluster can take, plus a per-tenant share of it | Built |
 | T7 | Agent writes a false note a later session trusts | Provenance (`author`, `source_query`), bi-temporal history, decay, staleness detection | Partial — detection works, correction does not (§7) |
 
 T7 is worth naming explicitly because isolation does *not* address it: a poisoned
@@ -397,9 +397,12 @@ cannot smuggle past a regex on statement text.
    scopes are held in a `WeakKeyDictionary` against the SDK's own session object,
    so a finished connection releases its state with no TTL, no LRU, and no sweep.
    The eviction policy is the garbage collector.
-2. **`session_idle_timeout` is unset.** Our `streamable_http_app()` call passes
-   host, path, and transport security — no idle timeout. Default is `None` = never
-   reaped. SDK docs recommend `1800`. *Still open.*
+2. **`session_idle_timeout` was unset.** The SDK's factory takes no argument for
+   it, and the default is `None` = never reaped. *Resolved:* it is now set on the
+   session manager the factory returns, defaulting to the SDK's recommended
+   `1800`. This is what makes item 1 real — weak references release a scope when
+   the SDK drops the session, and without a deadline the SDK never drops it, so
+   an abandoned connection would pin its state for the life of the process.
 
 ---
 
@@ -500,7 +503,7 @@ flowchart LR
     P1["Phase 1 ✓<br/>Principal + session<br/>derivation"] --> P2["Phase 2 ✓<br/>Key state by<br/>(principal, session)<br/>held weakly"]
     P2 --> P3["Phase 3 ✓<br/>principal field on<br/>memory rows<br/>+ filtered reads"]
     P3 --> P4["Phase 4<br/>Per-principal<br/>dataverse allowlist<br/>in plan_guard"]
-    P4 --> P5["Phase 5<br/>Per-principal pools<br/>+ quotas"]
+    P4 --> P5["Phase 5 ✓<br/>Global ceiling +<br/>per-tenant share"]
     P2 -.-> H["H1–H5 scaling fixes<br/>(independent track)"]
 ```
 
@@ -510,7 +513,7 @@ flowchart LR
 | 2 | C1, C2, **C3**, C4 (T4) | none | **done** | `scopes.py`; weak refs made TTL eviction unnecessary. `session_idle_timeout=1800` still outstanding |
 | 3 | Plane 3 (T3) | none | **done** | changes stored data; the ownership backfill adopts pre-existing rows on first boot |
 | 4 | Plane 4 (T5) | none | next | enforced on the compiled plan, not statement text |
-| 5 | noisy neighbor (T6) | none | next | pools are process-wide today, so T6 is currently unbounded |
+| 5 | noisy neighbor (T6) | none | **done** | two-level: a global ceiling *and* a per-tenant share of it. Partitioning alone would reserve capacity the cluster does not have; a global limit alone lets one tenant make the gateway look full to everyone |
 
 **Every phase is gateway-side.** The full end-to-end multi-tenant prototype is
 achievable with zero engine changes.
@@ -554,10 +557,24 @@ wall-clock budget.
 
 1. `datasets_from_sources()` currently **fails open** — see finding H6 in
    `PRODUCTION_READINESS_FINDINGS.md`. Authorization must fail closed.
-2. Compile-then-execute means the statement is compiled twice; we authorize the
-   plan from call 1 and the engine executes a fresh compile in call 2. Low risk
-   (same text, metadata rarely moves mid-flight), but it is an assumption, not a
-   guarantee.
+2. **Known TOCTOU limitation.** Compile-then-execute means the statement is
+   compiled twice: we authorize the plan from call 1, and the engine executes a
+   fresh compile in call 2. We cannot prove the plan we executed is the plan we
+   authorized. Any DDL landing in that window — a view redefinition, a synonym
+   repoint — changes what the second compile resolves to.
+
+   Worth being precise about who can exploit it, because it changes the fix, not
+   the severity. An *agent* cannot: `readonly=true` gives it no DDL path, so it
+   cannot both issue the query and move the target. The window is opened by
+   ordinary concurrent DDL from a human or a pipeline on 19002 — which the threat
+   model places outside the boundary, and which is exactly why this is an
+   invariant we cannot assert rather than an attack we can rate.
+
+   Acceptable for the AI-sandbox prototype. A production-grade Phase 4 needs the
+   engine to hand back an executable handle from the compile — a `plan_id` we can
+   submit — so authorization and execution refer to the same compiled plan
+   instead of two compilations we hope agree. **This is the one genuine engine
+   ask in the whole plan.**
 3. Non-query statements have no plan; they are covered by `readonly=true`, which
    means we trust the engine to honor that flag. Pre-existing reliance, but it
    becomes load-bearing for tenancy.

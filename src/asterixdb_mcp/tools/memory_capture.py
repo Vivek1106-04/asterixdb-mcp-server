@@ -27,6 +27,7 @@ cluster, or an unwritable log never surfaces to the caller.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import uuid
@@ -42,8 +43,14 @@ from . import ToolResult
 from .memory_notes import subjects_from_statement
 from .memory_write import run_memory_write
 
+logger = logging.getLogger(__name__)
+
 MAX_CAPTURED_STATEMENT_LEN = 300
 MAX_WARNING_LEN = 200
+
+# Whether the current full-buffer spell has already been logged. Reset by the
+# first append that fits, so a later spell is reported again.
+_buffer_full_reported = False
 
 from ..memory_store import SESSION_EVENT_DATASET  # noqa: E402  re-exported
 
@@ -257,8 +264,31 @@ async def _flush_one_buffer(client: CCClient, settings: Settings, path: Path) ->
 
 
 def _append_jsonl_event(settings: Settings, event: dict[str, Any]) -> None:
+    """Buffer one event to disk, up to the configured budget.
+
+    The budget is what stops an agent from turning query outcomes into a disk-full
+    condition that takes the gateway down for everyone. It is measured across the
+    whole buffer directory rather than one file, because each session id gets its
+    own file and a crashed session's file is not reclaimed by its successor —
+    per-file caps would let N restarts cost N budgets.
+
+    Over budget, the event is dropped. The buffer exists so distillation can catch
+    up after an outage, so losing the tail of a long outage costs some learning;
+    losing the disk costs the gateway.
+    """
+    global _buffer_full_reported
     path = _buffer_path(settings)
     if path is None:
+        return
+    if _buffer_bytes(path.parent) >= settings.session_log_max_bytes:
+        if not _buffer_full_reported:
+            # Once per spell, not once per event: the flood that fills the buffer
+            # must not become a flood in the log.
+            logger.warning(
+                "session event buffer is full (%s bytes); dropping events until it drains",
+                settings.session_log_max_bytes,
+            )
+            _buffer_full_reported = True
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,6 +296,15 @@ def _append_jsonl_event(settings: Settings, event: dict[str, Any]) -> None:
             fh.write(json.dumps(event) + "\n")
     except OSError:
         return
+    _buffer_full_reported = False
+
+
+def _buffer_bytes(directory: Path) -> int:
+    """Total size of the buffer directory. Best-effort: unmeasurable reads as empty."""
+    try:
+        return sum(entry.stat().st_size for entry in directory.iterdir() if entry.is_file())
+    except OSError:
+        return 0
 
 
 def _buffer_path(settings: Settings) -> Path | None:

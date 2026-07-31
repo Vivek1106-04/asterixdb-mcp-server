@@ -104,12 +104,25 @@ only ever wanted aggregates. This is the structural fix; retention becomes moot.
 Rough estimate at ~500 B average: ~500 MB/day at 10⁶ queries/day, before LSM and
 replication overhead.
 
-### H4 — The offline JSONL buffer has no size cap
-`tools/memory_capture.py:258-267`
+### H4 — The offline JSONL buffer has no size cap — **fixed**
+`tools/memory_capture.py`
 
-When the cluster is unreachable, every event appends to a JSONL file with no cap, no
-rotation, no age limit. A long cluster outage fills the disk, and disk-full then takes
-down the gateway for reasons unrelated to memory.
+Every event appended to a JSONL file with no cap, no rotation, no age limit, so a
+full disk took the gateway down for reasons unrelated to memory.
+
+Worse than first described: this was not only an outage path. The buffer is the
+fallback whenever the cluster does not take an event, and with
+`memory_write_enabled=false` — a supported configuration — *every* query outcome
+took it, no outage required. In a multi-tenant gateway that makes it a denial of
+service any agent can trigger by provoking query outcomes, against every tenant at
+once. That is why it could not stay on the independent track.
+
+Fixed with a byte budget (`session_log_max_bytes`, default 32 MiB) measured across
+the whole buffer directory rather than one file: each session id gets its own file
+and a crashed session's file is not reclaimed by its successor, so a per-file cap
+would let N restarts cost N budgets. Over budget, events are dropped and the
+condition is logged once per spell — the flood that fills the buffer must not
+become a flood in the log.
 
 ### H6 — `datasets_from_sources()` fails open (latent; becomes a bypass when Phase 4 lands)
 `plan_parser.py:139-140`

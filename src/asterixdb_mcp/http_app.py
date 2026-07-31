@@ -183,6 +183,12 @@ def build_http_app(mcp: MCPServer, settings: Settings) -> Starlette:
         streamable_http_path=settings.http_path,
         transport_security=build_transport_security(settings),
     )
+    # The SDK's factory takes no argument for this, so it is set on the session
+    # manager the factory just built. Without a deadline the SDK never drops an
+    # idle session, and per-connection state is released only when the session
+    # object is dropped — so an abandoned connection would pin its scope and its
+    # file descriptors for the life of the process.
+    mcp.session_manager.session_idle_timeout = settings.session_idle_timeout_s or None
     app.router.routes.append(Route(HEALTH_PATH, health, methods=["GET"]))
     # Overflow artifact downloads. Deliberately NOT exempt from auth below: the
     # file holds the full result, so it sits behind the same credential as the
