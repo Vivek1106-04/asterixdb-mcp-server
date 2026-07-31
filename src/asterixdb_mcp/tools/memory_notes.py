@@ -19,9 +19,10 @@ from typing import Any
 from ..cc_client import CCClient
 from ..config import Settings
 from ..errors import GatewayError
+from ..memory_store import MEMORY_DATASET, scope_clause
 from ..staleness import SUSPECT_LABEL, check_rows, is_suspect, render_warning
 from . import ToolResult
-from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
+from .memory_search import _IDENTIFIER_RE
 
 MAX_NOTE_SUBJECTS = 4
 MAX_NOTE_LEN = 500
@@ -52,7 +53,7 @@ HAVE_NOTES_HINT = (
 
 _NOTES_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m "
-    "WHERE m.subject IN $subjects AND m.valid_to IS UNKNOWN;"
+    f"WHERE m.subject IN $subjects AND m.valid_to IS UNKNOWN AND {scope_clause('m')};"
 )
 
 # Qualified collection references in FROM/JOIN/UNNEST clauses; deliberately not
@@ -112,7 +113,7 @@ async def _query_note_rows(
 ) -> list[dict[str, Any]]:
     """Fetch current note-bearing rows for exact subjects (best-effort)."""
     try:
-        envelope = await client.execute(
+        envelope = await client.execute_memory_read(
             _NOTES_QUERY, client_context_id=ccid, statement_parameters={"subjects": subjects}
         )
     except GatewayError:

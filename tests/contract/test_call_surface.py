@@ -814,6 +814,29 @@ async def test_memory_write_enabled_creates_and_validates_schema() -> None:
     assert annotations.read_only_hint is False and annotations.destructive_hint is False
 
 
+async def test_a_note_written_through_the_call_surface_names_its_owner() -> None:
+    # The tool never sees a principal: the server binds the client to the caller's
+    # tenant, so a write that reaches the store already carries an owner.
+    import json
+    from urllib.parse import parse_qs
+
+    from asterixdb_mcp.identity import LOCAL_PRINCIPAL
+    from asterixdb_mcp.memory_store import PRINCIPAL_FIELD
+
+    written: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        form = parse_qs(req.content.decode())
+        if "$row" in form:
+            written.append(json.loads(form["$row"][0]))
+        return httpx.Response(200, json={"status": "success", "results": []})
+
+    server = _server_with_mock(handler, memory_write_enabled=True)
+    await server.call_tool("memory_write", {"subject": "dv.ds", "text": "note"})
+
+    assert written and {row[PRINCIPAL_FIELD] for row in written} == {LOCAL_PRINCIPAL}
+
+
 async def test_remember_preference_records_rule_via_call_surface() -> None:
     def handler(_req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "success", "results": []})

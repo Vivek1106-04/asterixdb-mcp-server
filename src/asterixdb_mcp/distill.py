@@ -32,7 +32,7 @@ from .cc_client import CCClient
 from .config import Settings
 from .context_id import make_client_context_id
 from .errors import GatewayError
-from .tools.memory_capture import SESSION_EVENT_DATASET
+from .memory_store import SESSION_EVENT_DATASET, scope_clause
 from .tools.memory_notes import subjects_from_statement
 from .tools.memory_write import run_memory_write
 
@@ -43,7 +43,7 @@ MIN_FAILURES_DEFAULT = 3
 MIN_SLOW_OCCURRENCES_DEFAULT = 3
 SLOW_MS_DEFAULT = 5_000.0
 
-EVENTS_QUERY = f"SELECT VALUE e FROM {SESSION_EVENT_DATASET} e;"
+EVENTS_QUERY = f"SELECT VALUE e FROM {SESSION_EVENT_DATASET} e WHERE {scope_clause('e')};"
 
 
 def dedupe_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -138,7 +138,7 @@ def slow_patterns(
 async def fetch_cluster_events(client: CCClient, ccid: str) -> list[dict[str, Any]]:
     """Read every recorded session event from the cluster (best-effort)."""
     try:
-        envelope = await client.execute(EVENTS_QUERY, client_context_id=ccid)
+        envelope = await client.execute_memory_read(EVENTS_QUERY, client_context_id=ccid)
     except GatewayError:
         return []
     return [row for row in envelope.get("results", []) if isinstance(row, dict)]

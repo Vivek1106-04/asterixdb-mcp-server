@@ -35,8 +35,9 @@ from ..cc_client import CCClient
 from ..config import Settings
 from ..context_id import make_client_context_id
 from ..errors import ErrorType, GatewayError
+from ..memory_store import MEMORY_DATASET, scope_clause
 from . import ToolResult
-from .memory_search import _IDENTIFIER_RE, MEMORY_DATASET
+from .memory_search import _IDENTIFIER_RE
 
 PREFERENCE_TYPE = "Preference"
 PREFERENCE_KIND = "preference"
@@ -48,11 +49,12 @@ MAX_PREF_LEN = 500
 _SUBJECT_PREFIX = "_pref/"
 
 _CURRENT_QUERY = (
-    f"SELECT VALUE m FROM {MEMORY_DATASET} m WHERE m.subject = $subject AND m.valid_to IS UNKNOWN;"
+    f"SELECT VALUE m FROM {MEMORY_DATASET} m "
+    f"WHERE m.subject = $subject AND m.valid_to IS UNKNOWN AND {scope_clause('m')};"
 )
 _ACTIVE_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m "
-    "WHERE m.subject IN $subjects AND m.valid_to IS UNKNOWN;"
+    f"WHERE m.subject IN $subjects AND m.valid_to IS UNKNOWN AND {scope_clause('m')};"
 )
 _INSERT = f"INSERT INTO {MEMORY_DATASET} ([$row]);"
 
@@ -144,7 +146,7 @@ async def run_remember_preference(
 
 
 async def _fetch_current(client: CCClient, ccid: str, subject: str) -> list[dict[str, Any]]:
-    envelope = await client.execute(
+    envelope = await client.execute_memory_read(
         _CURRENT_QUERY, client_context_id=ccid, statement_parameters={"subject": subject}
     )
     return [row for row in envelope.get("results", []) if isinstance(row, dict)]
@@ -160,7 +162,7 @@ async def fetch_active_preferences(client: CCClient, ccid: str, scopes: list[str
     if not subjects:
         return []
     try:
-        envelope = await client.execute(
+        envelope = await client.execute_memory_read(
             _ACTIVE_QUERY, client_context_id=ccid, statement_parameters={"subjects": subjects}
         )
     except GatewayError:

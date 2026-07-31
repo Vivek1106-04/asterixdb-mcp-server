@@ -61,6 +61,7 @@ from .resources.templates import (
     read_dataverse_schema,
 )
 from .resources.version import read_version
+from .scopes import ScopeRegistry
 from .tool_annotations import TOOL_ANNOTATIONS
 from .tools import ToolResult
 from .tools.async_query import (
@@ -69,7 +70,7 @@ from .tools.async_query import (
     run_submit_async_query,
     run_wait_on_async_query,
 )
-from .tools.briefing import BriefingState, maybe_attach_briefing
+from .tools.briefing import maybe_attach_briefing
 from .tools.check_index_usage import run_check_index_usage
 from .tools.dataset_stats import run_get_dataset_statistics
 from .tools.describe_dataverse import run_describe_dataverse
@@ -83,8 +84,7 @@ from .tools.health_check import run_database_health_check
 from .tools.introspect import run_explain_query, run_validate_syntax
 from .tools.list_datasets import run_list_datasets
 from .tools.list_dataverses import run_list_dataverses
-from .tools.memory_capture import CaptureState, capture_error_signal, capture_query_outcome
-from .tools.memory_notes import RecallState
+from .tools.memory_capture import capture_error_signal, capture_query_outcome
 from .tools.memory_search import run_memory_search
 from .tools.memory_write import run_memory_write
 from .tools.physical_plan import run_explain_physical_plan
@@ -604,9 +604,11 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         client=CCClient(settings, http) if http is not None else None,
     )
     audit = AuditLog(settings.audit_log_ttl_s)
-    capture = CaptureState()
-    recall = RecallState()
-    briefing = BriefingState()
+    # Briefing, recall and capture are per-connection, not per-process: one HTTP
+    # process serves every client, so a shared instance would leak one client's
+    # state into another's. The registry hands each connection its own bundle
+    # and releases it when the connection ends.
+    scopes = ScopeRegistry()
     pools = PermitPools.from_settings(settings)
 
     # Host/port/path and DNS-rebinding protection are transport concerns in the 2.x
@@ -630,8 +632,19 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         **mcp_kwargs,
     )
 
-    def _client() -> CCClient:
-        return holder.get()
+    def _client(ctx: Context | None = None) -> CCClient:
+        """The CC client for this call, bound to the caller's tenant when known.
+
+        Anything that can reach the memory store passes ``ctx`` so its writes
+        carry an owner. Paths that never touch memory (catalog reads, cluster
+        admin, and resources, which the SDK invokes without a context) take the
+        unbound client; if one of them ever tries a memory write, the client
+        refuses rather than storing a row that belongs to nobody.
+        """
+        client = holder.get()
+        if ctx is None:
+            return client
+        return client.for_principal(scopes.for_call(ctx, settings).identity.principal)
 
     # Tools
 
@@ -673,7 +686,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         try:
             async with pools.sync.acquire():
                 result = await run_execute_query(
-                    _client(),
+                    _client(ctx),
                     settings,
                     statement=statement,
                     dataverse=dataverse,
@@ -684,7 +697,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
                     signature=signature,
                     max_warnings=maxWarnings,
                     download_format=downloadFormat,
-                    recall=recall,
+                    recall=scopes.for_call(ctx, settings).recall,
                 )
         except GatewayError as err:
             result = ToolResult.error(err)
@@ -702,9 +715,9 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         # store the moment a failing statement finds its working form. The
         # signal covers raised errors AND silent misses (0 rows + warnings).
         await capture_query_outcome(
-            _client(),
+            _client(ctx),
             settings,
-            capture,
+            scopes.for_call(ctx, settings).capture,
             statement=statement,
             result_error=capture_error_signal(result),
             client_name=_client_identity(ctx),
@@ -718,11 +731,13 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         annotations=TOOL_ANNOTATIONS["get_schema"],
     )
     async def get_schema(
+        ctx: Context,
         dataverse: Annotated[str, Field(description="Dataverse containing the dataset.")],
         dataset: Annotated[str, Field(description="Dataset to describe.")],
     ) -> types.CallToolResult:
         result = await run_get_schema(_client(), settings, dataverse=dataverse, dataset=dataset)
-        result = await maybe_attach_briefing(_client(), settings, briefing, result)
+        briefing = scopes.for_call(ctx, settings).briefing
+        result = await maybe_attach_briefing(_client(ctx), settings, briefing, result)
         return _to_call_tool_result(result)
 
     @mcp.tool(
@@ -730,9 +745,10 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         description=LIST_DATAVERSES_DESCRIPTION,
         annotations=TOOL_ANNOTATIONS["list_dataverses"],
     )
-    async def list_dataverses() -> types.CallToolResult:
+    async def list_dataverses(ctx: Context) -> types.CallToolResult:
         result = await run_list_dataverses(_client(), settings)
-        result = await maybe_attach_briefing(_client(), settings, briefing, result)
+        briefing = scopes.for_call(ctx, settings).briefing
+        result = await maybe_attach_briefing(_client(ctx), settings, briefing, result)
         return _to_call_tool_result(result)
 
     @mcp.tool(
@@ -741,6 +757,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         annotations=TOOL_ANNOTATIONS["list_datasets"],
     )
     async def list_datasets(
+        ctx: Context,
         dataverse: Annotated[str | None, Field(description="Optional Dataverse filter.")] = None,
         offset: Annotated[int, Field(ge=0, description="Page offset.")] = 0,
         limit: Annotated[int, Field(ge=1, le=500, description="Page size.")] = 50,
@@ -748,7 +765,8 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         result = await run_list_datasets(
             _client(), settings, dataverse=dataverse, offset=offset, limit=limit
         )
-        result = await maybe_attach_briefing(_client(), settings, briefing, result)
+        briefing = scopes.for_call(ctx, settings).briefing
+        result = await maybe_attach_briefing(_client(ctx), settings, briefing, result)
         return _to_call_tool_result(result)
 
     @mcp.tool(
@@ -768,6 +786,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         annotations=TOOL_ANNOTATIONS["sample_dataset"],
     )
     async def sample_dataset(
+        ctx: Context,
         dataverse: Annotated[str, Field(description="Dataverse containing the dataset.")],
         dataset: Annotated[str, Field(description="Dataset to sample.")],
         size: Annotated[int, Field(ge=1, le=100, description="Rows to sample.")] = 10,
@@ -780,13 +799,13 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         ] = None,
     ) -> types.CallToolResult:
         result = await run_sample_dataset(
-            _client(),
+            _client(ctx),
             settings,
             dataverse=dataverse,
             dataset=dataset,
             size=size,
             download_format=downloadFormat,
-            recall=recall,
+            recall=scopes.for_call(ctx, settings).recall,
         )
         return _to_call_tool_result(result)
 
@@ -834,13 +853,13 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         ] = None,
     ) -> types.CallToolResult:
         result = await run_wait_on_async_query(
-            _client(),
+            _client(ctx),
             settings,
             audit,
             pools,
             client_context_id=clientContextID,
             timeout_ms=timeoutMs,
-            capture=capture,
+            capture=scopes.for_call(ctx, settings).capture,
             client_name=_client_identity(ctx),
         )
         return _to_call_tool_result(result)
@@ -1010,6 +1029,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         annotations=TOOL_ANNOTATIONS["memory_search"],
     )
     async def memory_search(
+        ctx: Context,
         query: Annotated[
             str,
             Field(description="Free-text question or keywords to match against concept bodies."),
@@ -1036,7 +1056,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         ] = 1,
     ) -> types.CallToolResult:
         result = await run_memory_search(
-            _client(),
+            _client(ctx),
             settings,
             query=query,
             subject=subject,
@@ -1081,7 +1101,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         ] = None,
     ) -> types.CallToolResult:
         result = await run_memory_write(
-            _client(),
+            _client(ctx),
             settings,
             subject=subject,
             text=text,
@@ -1110,7 +1130,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         ] = "global",
     ) -> types.CallToolResult:
         result = await run_remember_preference(
-            _client(),
+            _client(ctx),
             settings,
             text=text,
             scope=scope,
