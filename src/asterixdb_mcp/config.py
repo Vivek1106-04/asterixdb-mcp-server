@@ -23,6 +23,12 @@ DEFAULT_REQUEST_TIMEOUT_S = 35.0  # httpx transport timeout; must exceed max_tim
 DEFAULT_SYNC_PERMITS = 3  # blocking execute_query calls in flight
 DEFAULT_ASYNC_PERMITS = 2  # async submissions in flight
 DEFAULT_MAX_CONCURRENT_WAITS = 16  # in-gateway long-poll loops in flight
+# Per-tenant share of each pool. Deliberately below the pool size: a ceiling that
+# equals the pool is not a ceiling. Cross-multiplying instead (pool = cap x tenants)
+# would reserve capacity the cluster does not have.
+DEFAULT_PERMITS_PER_PRINCIPAL = 2  # one tenant's slice of any single pool
+DEFAULT_SESSION_IDLE_TIMEOUT_S = 1800.0  # SDK's recommendation; 0 disables reaping
+DEFAULT_SESSION_LOG_MAX_BYTES = 32 * 1024 * 1024  # whole-directory budget for the event buffer
 
 # Async long-poll bounds (see wait_on_async_query).
 DEFAULT_MAX_WAIT_MS = 10_000  # ceiling on a single wait_on_async_query call
@@ -113,6 +119,13 @@ class Settings(BaseSettings):
         "they are the episodic record scripts/memory_distill.py distills offline. "
         "Unset disables file logging.",
     )
+    session_log_max_bytes: int = Field(
+        default=DEFAULT_SESSION_LOG_MAX_BYTES,
+        ge=1,
+        description="Total byte budget for the session-log directory. Events are "
+        "dropped once it is reached, so an agent cannot turn query outcomes into "
+        "a disk-full condition that stops the gateway for every tenant.",
+    )
     auto_maintenance_enabled: bool = Field(
         default=True,
         description="Run the bounded startup maintenance pass (store bootstrap, "
@@ -163,6 +176,20 @@ class Settings(BaseSettings):
         default=DEFAULT_MAX_CONCURRENT_WAITS,
         ge=1,
         description="Max concurrent wait_on_async_query long-poll loops before NOT_READY.",
+    )
+    permits_per_principal: int = Field(
+        default=DEFAULT_PERMITS_PER_PRINCIPAL,
+        ge=1,
+        description="Max permits any one tenant may hold in a single pool. Bounds a "
+        "noisy neighbour: without it, one tenant can take every permit and every "
+        "other tenant sees NOT_READY.",
+    )
+    session_idle_timeout_s: float = Field(
+        default=DEFAULT_SESSION_IDLE_TIMEOUT_S,
+        ge=0,
+        description="Seconds an HTTP session may sit idle before the SDK reaps it, "
+        "releasing its per-connection state. 0 disables reaping, which lets an "
+        "abandoned connection hold its state for the life of the process.",
     )
 
     # Async long-poll behavior

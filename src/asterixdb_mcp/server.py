@@ -646,6 +646,10 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
             return client
         return client.for_principal(scopes.for_call(ctx, settings).identity.principal)
 
+    def _principal(ctx: Context) -> str:
+        """The tenant to charge this call's permits to."""
+        return scopes.for_call(ctx, settings).identity.principal
+
     # Tools
 
     @mcp.tool(
@@ -684,7 +688,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         # The sync permit pool bounds concurrent blocking queries; a full pool
         # sheds load with NOT_READY rather than queueing.
         try:
-            async with pools.sync.acquire():
+            async with pools.sync.acquire(_principal(ctx)):
                 result = await run_execute_query(
                     _client(ctx),
                     settings,
@@ -817,6 +821,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         annotations=TOOL_ANNOTATIONS["submit_async_query"],
     )
     async def submit_async_query(
+        ctx: Context,
         statement: Annotated[str, Field(description="Pure SQL++ statement, no SET prefix.")],
         dataverse: Annotated[
             str | None, Field(description="Default Dataverse for unqualified names.")
@@ -827,7 +832,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         ] = None,
     ) -> types.CallToolResult:
         result = await run_submit_async_query(
-            _client(),
+            _client(ctx),
             settings,
             audit,
             pools,
@@ -1274,6 +1279,7 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         annotations=TOOL_ANNOTATIONS["profile_query"],
     )
     async def profile_query(
+        ctx: Context,
         statement: Annotated[str, Field(description="SQL++ statement to run and profile.")],
         dataverse: Annotated[
             str | None, Field(description="Default Dataverse for unqualified names.")
@@ -1283,9 +1289,9 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
         # Executes a query; bound concurrency through the sync permit pool like
         # execute_query so profiling cannot fan out unbounded blocking runs.
         try:
-            async with pools.sync.acquire():
+            async with pools.sync.acquire(_principal(ctx)):
                 result = await run_profile_query(
-                    _client(),
+                    _client(ctx),
                     settings,
                     statement=statement,
                     dataverse=dataverse,

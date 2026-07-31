@@ -21,7 +21,7 @@ async def test_acquire_and_release_round_trips_in_use() -> None:
     assert pool.in_use == 0
     assert pool.available == 2
 
-    async with pool.acquire():
+    async with pool.acquire("tenant-a"):
         assert pool.in_use == 1
         assert pool.available == 1
 
@@ -33,7 +33,7 @@ async def test_acquire_releases_on_exception_in_body() -> None:
     pool = PermitPool(1, "test")
 
     with pytest.raises(RuntimeError):
-        async with pool.acquire():
+        async with pool.acquire("tenant-a"):
             raise RuntimeError("boom")
 
     assert pool.in_use == 0
@@ -42,10 +42,10 @@ async def test_acquire_releases_on_exception_in_body() -> None:
 async def test_full_pool_raises_not_ready() -> None:
     pool = PermitPool(1, "synchronous query")
 
-    async with pool.acquire():
+    async with pool.acquire("tenant-a"):
         # Drive __aenter__ directly: it raises before any body would run, so
         # there is no unreachable suite to mark with a coverage pragma.
-        busy = pool.acquire()
+        busy = pool.acquire("tenant-a")
         with pytest.raises(GatewayError) as exc_info:
             await busy.__aenter__()
 
@@ -57,9 +57,9 @@ async def test_full_pool_raises_not_ready() -> None:
 async def test_capacity_is_reusable_after_release() -> None:
     pool = PermitPool(1, "test")
 
-    async with pool.acquire():
+    async with pool.acquire("tenant-a"):
         pass
-    async with pool.acquire():
+    async with pool.acquire("tenant-a"):
         assert pool.in_use == 1
 
 

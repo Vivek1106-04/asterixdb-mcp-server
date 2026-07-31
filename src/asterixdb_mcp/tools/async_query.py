@@ -89,7 +89,7 @@ async def run_submit_async_query(
         advisory = await assess_columnar_scan(
             client, client_context_id, compiled.get("plans"), dataverse
         )
-        async with pools.async_.acquire():
+        async with pools.async_.acquire(client.principal):
             envelope = await client.submit_async(
                 effective_statement,
                 client_context_id=client_context_id,
@@ -174,7 +174,7 @@ async def run_wait_on_async_query(
 
     handle = entry.handle
     try:
-        async with pools.waits.acquire():
+        async with pools.waits.acquire(client.principal):
             return await _poll_until_terminal(
                 client,
                 settings,
