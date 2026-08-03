@@ -276,6 +276,91 @@ def test_revalidate_matching_digest_and_failed_query_leave_row_alone(monkeypatch
     assert (supersede, stamp, checked) == ([], [], 2)
 
 
+def _recording_execute(results: list | None = None) -> tuple[list[tuple], object]:
+    """Record (statement, parameters) for every call; answer with ``results``."""
+    calls: list[tuple] = []
+
+    def fake(cc: str, statement: str, parameters: dict | None = None) -> dict:
+        calls.append((statement, parameters))
+        return {"results": results or []}
+
+    return calls, fake
+
+
+def test_execute_binds_named_parameters_instead_of_splicing_them(monkeypatch) -> None:
+    sent: dict = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"status": "success", "results": []}'
+
+    def fake_urlopen(request):
+        sent["body"] = request.data.decode()
+        return _Response()
+
+    monkeypatch.setattr(okf_refresh.urllib.request, "urlopen", fake_urlopen)
+    okf_refresh.execute("http://cc", "SELECT 1;", {"principal": 'a"b'})
+    # the value arrives JSON-encoded in its own field, never in the statement
+    assert "%24principal=%22a%5C%22b%22" in sent["body"]
+    assert "a%22b" not in sent["body"].split("&")[0]
+
+
+def test_fetch_current_binds_the_principal_it_reads_as(monkeypatch) -> None:
+    calls, fake = _recording_execute([{"subject": "a.b", "principal": "tenant-1"}])
+    monkeypatch.setattr(okf_refresh, "execute", fake)
+    current = okf_refresh.fetch_current("cc", "tenant-1")
+    statement, parameters = calls[0]
+    assert "$principal" in statement
+    assert parameters == {"principal": "tenant-1"}
+    assert set(current) == {"a.b"}
+
+
+def test_fetch_current_drops_the_global_tier_it_does_not_own(monkeypatch) -> None:
+    # the store's read predicate is "mine or global", so shared rows come back too;
+    # reconciling them would let one tenant's walk retire a fact everyone reads
+    _, fake = _recording_execute(
+        [
+            {"subject": "mine", "principal": "tenant-1"},
+            {"subject": "shared", "principal": "*"},
+        ]
+    )
+    monkeypatch.setattr(okf_refresh, "execute", fake)
+    assert set(okf_refresh.fetch_current("cc", "tenant-1")) == {"mine"}
+
+
+def test_apply_stamps_new_rows_with_their_owner(monkeypatch) -> None:
+    calls, fake = _recording_execute()
+    monkeypatch.setattr(okf_refresh, "execute", fake)
+    okf_refresh.apply("cc", [{"id": "a@t1", "subject": "a"}], [], "tenant-1")
+    assert '"principal": "tenant-1"' in calls[0][0]
+
+
+def test_apply_leaves_a_superseded_rows_owner_alone(monkeypatch) -> None:
+    calls, fake = _recording_execute()
+    monkeypatch.setattr(okf_refresh, "execute", fake)
+    okf_refresh.apply("cc", [], [{"id": "a@t0", "principal": "tenant-2"}], "tenant-1")
+    assert '"principal": "tenant-2"' in calls[0][0]
+
+
+def test_adopt_unowned_claims_legacy_rows_and_is_a_noop_when_there_are_none(monkeypatch) -> None:
+    calls, fake = _recording_execute([{"id": "legacy-1"}, {"id": "legacy-2"}, "not-a-row"])
+    monkeypatch.setattr(okf_refresh, "execute", fake)
+    assert okf_refresh.adopt_unowned("cc", "tenant-1") == 2
+    assert calls[1][0].startswith("UPSERT INTO AgentMemory.Memory")
+    assert calls[1][0].count('"principal": "tenant-1"') == 2
+
+    empty, fake_empty = _recording_execute([])
+    monkeypatch.setattr(okf_refresh, "execute", fake_empty)
+    assert okf_refresh.adopt_unowned("cc", "tenant-1") == 0
+    assert len(empty) == 1  # read only; nothing to write
+
+
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
 
 
