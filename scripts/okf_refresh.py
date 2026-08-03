@@ -27,6 +27,15 @@ dropped from the carried-forward overlay (the superseded row keeps them as
 history). ``text`` is always the merged rendering, so the full-text index and
 every consumer see one seamless document.
 
+Every row in the store belongs to a tenant, and every read of it carries a
+principal predicate, so this script has to say who it is writing as. It writes
+as the identity this deployment's own requests resolve to — the same rule the
+gateway's ownership backfill adopts legacy rows under — and ``--principal``
+overrides it for an operator refreshing some other tenant's tier. Rows written
+before the store had owners are adopted on the way in, so a store this script
+populated before tenant scoping does not end up with a second, owned copy of
+every concept sitting beside an invisible one.
+
 ``--revalidate`` adds a self-grounding pass over stored memories the walk does
 not itself refresh: each such row's ``source_query`` is re-executed and
 fingerprinted. The conflict policy
@@ -36,7 +45,7 @@ leaves the row alone.
 
 Usage:
     python scripts/okf_refresh.py [--cc http://localhost:19002] [--dataverse DV]
-                                  [--ground] [--revalidate]
+                                  [--principal P] [--ground] [--revalidate]
 """
 
 from __future__ import annotations
@@ -58,7 +67,17 @@ if SRC not in sys.path:
 
 # The pure reconcile core and canonical store constants are shared with the
 # gateway's automatic startup walk (asterixdb_mcp.okf_walk); this script adds
-# the full pipeline on top: grounding, revalidation, scoped refreshes.
+# the full pipeline on top: grounding, revalidation, scoped refreshes. Tenancy
+# is shared the same way, so an operator refresh and a gateway walk stamp and
+# scope rows by one rule with no second implementation to drift.
+from asterixdb_mcp.config import Settings  # noqa: E402
+from asterixdb_mcp.identity import resolve_principal  # noqa: E402
+from asterixdb_mcp.memory_store import (  # noqa: E402
+    MEMORY_DATASET,
+    PRINCIPAL_FIELD,
+    UNOWNED_MEMORY_QUERY,
+    tag,
+)
 from asterixdb_mcp.okf_walk import (  # noqa: E402
     BOOTSTRAP_STATEMENTS,
     CURRENT_ROWS_QUERY,
@@ -85,9 +104,19 @@ DATASET_CONCEPT_TYPES = ("AsterixDB Dataset", "AsterixDB External Dataset", "Ast
 MAX_ADVISED_STATEMENTS = 3
 
 
-def execute(cc: str, statement: str) -> dict[str, Any]:
-    """POST one statement to the CC query service; raise on non-success."""
-    body = urllib.parse.urlencode({"statement": statement}).encode()
+def execute(cc: str, statement: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    """POST one statement to the CC query service; raise on non-success.
+
+    ``parameters`` bind SQL++ named parameters: the query service reads a
+    request field named ``$<name>`` holding the JSON-encoded value and binds it
+    at execution, so a value never reaches the statement text. A memory read
+    that does not bind its principal this way fails to compile rather than
+    quietly reading every tenant's rows.
+    """
+    form = {"statement": statement}
+    for name, value in (parameters or {}).items():
+        form[f"${name}"] = json.dumps(value)
+    body = urllib.parse.urlencode(form).encode()
     request = urllib.request.Request(
         cc.rstrip("/") + "/query/service",
         data=body,
@@ -120,16 +149,54 @@ def fetch_bundle(cc: str, dataverse: str | None) -> dict[str, dict[str, Any]]:
     }
 
 
-def fetch_current(cc: str) -> dict[str, dict[str, Any]]:
-    rows = execute(cc, CURRENT_ROWS_QUERY.format(kind=KIND)).get("results", [])
-    return {row["subject"]: row for row in rows if isinstance(row, dict) and "subject" in row}
+def adopt_unowned(cc: str, principal: str) -> int:
+    """Give this run's principal to every memory row that has no owner yet.
+
+    Idempotent by construction: the query matches only rows without a
+    ``principal``, so a second run finds nothing.
+    """
+    rows = [row for row in execute(cc, UNOWNED_MEMORY_QUERY).get("results", []) if _has_id(row)]
+    if rows:
+        owned = [tag(row, principal) for row in rows]
+        execute(cc, f"UPSERT INTO {MEMORY_DATASET} ({json.dumps(owned)});")
+    return len(rows)
 
 
-def apply(cc: str, inserts: list[dict[str, Any]], supersede: list[dict[str, Any]]) -> None:
+def fetch_current(cc: str, principal: str) -> dict[str, dict[str, Any]]:
+    """Current walk-kind rows this run owns, keyed by subject.
+
+    The store's read predicate is *mine or global*, so the shared tier comes
+    back mixed in. That tier is not the walk's to manage — superseding one of
+    its rows as "vanished" would retire a fact every tenant reads — so it is
+    dropped here and only this principal's own rows are reconciled.
+    """
+    rows = execute(cc, CURRENT_ROWS_QUERY.format(kind=KIND), {PRINCIPAL_FIELD: principal}).get(
+        "results", []
+    )
+    return {
+        row["subject"]: row
+        for row in rows
+        if isinstance(row, dict) and "subject" in row and row.get(PRINCIPAL_FIELD) == principal
+    }
+
+
+def apply(
+    cc: str, inserts: list[dict[str, Any]], supersede: list[dict[str, Any]], principal: str
+) -> None:
+    """Write the reconcile result, every new row stamped with its owner.
+
+    Superseded rows are rewritten from what the store returned, which is
+    already scoped to this principal, so they carry their owner unchanged.
+    """
     if supersede:
-        execute(cc, f"UPSERT INTO AgentMemory.Memory ({json.dumps(supersede)});")
+        execute(cc, f"UPSERT INTO {MEMORY_DATASET} ({json.dumps(supersede)});")
     if inserts:
-        execute(cc, f"INSERT INTO AgentMemory.Memory ({json.dumps(inserts)});")
+        owned = [tag(row, principal) for row in inserts]
+        execute(cc, f"INSERT INTO {MEMORY_DATASET} ({json.dumps(owned)});")
+
+
+def _has_id(row: Any) -> bool:
+    return isinstance(row, dict) and isinstance(row.get("id"), str)
 
 
 def ground(cc: str, bundle: dict[str, dict[str, Any]]) -> int:
@@ -254,6 +321,12 @@ def main() -> int:
     parser.add_argument("--cc", default="http://localhost:19002", help="CC base URL")
     parser.add_argument("--dataverse", default=None, help="Refresh only this dataverse")
     parser.add_argument(
+        "--principal",
+        default=None,
+        help="Tenant to write the walked concepts as (default: the identity this "
+        "deployment's own requests resolve to)",
+    )
+    parser.add_argument(
         "--ground",
         action="store_true",
         help="Execute each doc's profiling queries and ADVISE, folding results in",
@@ -265,27 +338,30 @@ def main() -> int:
     )
     options = parser.parse_args()
 
+    principal = options.principal or resolve_principal(Settings())
+
     bootstrap(options.cc)
     now = datetime.now(timezone.utc).isoformat()
     bundle = fetch_bundle(options.cc, options.dataverse)
     grounded = ground(options.cc, bundle) if options.ground else 0
-    current = fetch_current(options.cc)
+    adopted = adopt_unowned(options.cc, principal)
+    current = fetch_current(options.cc, principal)
     if options.revalidate:
         # only rows the walk does not refresh itself: the walk supersedes its
         # own subjects overlay-preservingly, so revalidating them here would
         # lose the carried overlay
         unmanaged = {s: row for s, row in current.items() if s not in bundle}
         stale, stamp, checked = revalidate(options.cc, unmanaged, now)
-        apply(options.cc, [], stale + stamp)
+        apply(options.cc, [], stale + stamp, principal)
         stale_ids = {row["id"] for row in stale}
         current = {s: row for s, row in current.items() if row.get("id") not in stale_ids}
         print(f"okf_refresh: revalidated {checked} | {len(stale)} drifted | {len(stamp)} stamped")
     inserts, supersede, unchanged = reconcile(bundle, current, now, options.dataverse)
-    apply(options.cc, inserts, supersede)
+    apply(options.cc, inserts, supersede, principal)
     print(
-        f"okf_refresh: {len(bundle)} concepts walked | "
+        f"okf_refresh: {len(bundle)} concepts walked as {principal!r} | "
         f"{len(inserts)} inserted | {len(supersede)} superseded | {unchanged} unchanged | "
-        f"{grounded} grounded"
+        f"{grounded} grounded | {adopted} adopted"
     )
     return 0
 

@@ -87,6 +87,9 @@ doc's profiling queries (real row counts) and runs the native `ADVISE` advisor
 over observed workload, folding results into the docs before reconcile.
 With `--revalidate` it re-runs the stored `source_query` fingerprints of
 learned memories and supersedes rows whose live results drifted (tool-wins).
+It writes as the identity this deployment's own requests resolve to, so the
+rows it materializes are the ones the gateway then reads; `--principal` points
+it at another tenant's tier instead.
 `scripts/okf_bundle.py` round-trips the store as a portable OKF bundle:
 one markdown file per concept, per-dataverse `index.md`, and `log.md`
 synthesized from the bi-temporal supersede chain.
