@@ -11,11 +11,17 @@ connection open, the LLM:
 The gateway holds no CC state: handles and clientContextIDs are the CC's own
 identifiers. A small TTL-bounded audit log remembers each submission so cancel
 can be keyed on the clientContextID and a session can recover a lost handle.
+
+A wait can sit for its whole window without the caller hearing anything, so it
+reports MCP progress on every poll. The reporter is injected the same way
+``sleep`` and ``clock`` are, which keeps this module free of the server session
+and leaves the tests able to observe what a caller would actually see.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -35,9 +41,16 @@ from ..tenant_policy import check_compiled_plan
 from . import ToolResult
 from .memory_capture import CaptureState, capture_query_outcome
 
+logger = logging.getLogger(__name__)
+
 # Result windowing bounds, mirrored from the inputSchema.
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 1000
+
+# (progress, total, message) — the shape of MCP's progress notification. The SDK
+# drops the call when the caller did not ask for progress, so nothing on this
+# path has to know whether it did.
+ProgressReporter = Callable[[float, float | None, str | None], Awaitable[None]]
 
 # CC result statuses that are terminal (no further polling will change them).
 _TERMINAL_STATUSES = frozenset({"success", "failed", "fatal", "timeout"})
@@ -146,6 +159,7 @@ async def run_wait_on_async_query(
     clock: Callable[[], float] | None = None,
     capture: CaptureState | None = None,
     client_name: str | None = None,
+    report: ProgressReporter | None = None,
 ) -> ToolResult:
     """Long-poll a submitted query (by clientContextID) until terminal or window ends.
 
@@ -155,6 +169,9 @@ async def run_wait_on_async_query(
     cadence. If the window elapses before the query finishes, the tool returns
     ``done=false`` so the caller can wait again, rather than holding the
     connection open indefinitely.
+
+    ``report`` receives one MCP progress notification per poll, so a client can
+    show that the wait is alive rather than a call that hangs for the window.
 
     When ``capture`` is passed, a terminal status also feeds the memory-capture
     pipeline: async timeouts and failures become session events and can pair
@@ -172,7 +189,8 @@ async def run_wait_on_async_query(
     clock = clock or time.monotonic
     budget_ms = _clamp_timeout(timeout_ms, settings.max_wait_ms)
     interval_s = settings.wait_poll_interval_ms / 1000.0
-    deadline = clock() + budget_ms / 1000.0
+    budget_s = budget_ms / 1000.0
+    deadline = clock() + budget_s
 
     handle = entry.handle
     try:
@@ -189,6 +207,7 @@ async def run_wait_on_async_query(
                 clock,
                 capture,
                 client_name,
+                _wait_progress(report, clock, budget_s),
             )
     except GatewayError as err:
         return ToolResult.error(err)
@@ -206,11 +225,13 @@ async def _poll_until_terminal(
     clock: Callable[[], float],
     capture: CaptureState | None,
     client_name: str | None,
+    tick: Callable[[str], Awaitable[None]],
 ) -> ToolResult:
     """Poll the status handle until terminal or the deadline passes."""
     while True:
         envelope = await client.poll_status(handle)
         status = (_as_str(envelope.get(STATUS_FIELD)) or "").lower()
+        await tick(status)
         if status in _TERMINAL_STATUSES:
             if capture is not None:
                 await _capture_terminal_outcome(
@@ -220,6 +241,36 @@ async def _poll_until_terminal(
         if clock() >= deadline:
             return _still_running_result(entry.client_context_id, status)
         await sleep(interval_s)
+
+
+def _wait_progress(
+    report: ProgressReporter | None, clock: Callable[[], float], budget_s: float
+) -> Callable[[str], Awaitable[None]]:
+    """A per-poll progress reporter for one wait window.
+
+    The CC reports a status, not a completion fraction, so time spent against
+    the window the caller allowed is the only honest progress the gateway can
+    offer — and it is the number the caller actually needs, since the wait ends
+    at that budget whether or not the query has. Clamped to the budget so a poll
+    that lands after the deadline never reports past 100%.
+    """
+
+    started = clock()
+
+    async def tick(status: str) -> None:
+        if report is None:
+            return
+        elapsed = min(clock() - started, budget_s)
+        try:
+            await report(elapsed, budget_s, f"Query {status or 'running'}")
+        except Exception:
+            # Progress is advisory and the query is already running. A client
+            # that disconnected mid-wait, or a caller dispatching outside a
+            # request context, must not turn a live wait into a failure — log it
+            # and keep polling.
+            logger.debug("progress notification failed; continuing the wait", exc_info=True)
+
+    return tick
 
 
 async def _capture_terminal_outcome(

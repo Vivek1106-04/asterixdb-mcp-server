@@ -48,7 +48,7 @@ a failed call to be rejected.
 |-------|------|---------|
 | Query | `execute_query` | Synchronous read-only SQL++ with offset/limit windowing. |
 | Query | `submit_async_query` | Submit a long-running query; returns a handle. |
-| Query | `wait_on_async_query` | Long-poll an async handle to completion. |
+| Query | `wait_on_async_query` | Long-poll an async handle to completion, reporting MCP progress each poll. |
 | Query | `fetch_query_result` | Page through a completed async result set. |
 | Query | `cancel_query` | Cancel an in-flight async query. |
 | Analyze | `validate_syntax` | Compile-only syntax check, no execution. |
