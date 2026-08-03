@@ -16,10 +16,12 @@ import pytest
 from asterixdb_mcp.config import Settings
 from asterixdb_mcp.okf_walk import (
     BOOTSTRAP_STATEMENTS,
+    PIPELINE_MARKER,
     bootstrap_store,
     fetch_bundle,
     fetch_current,
     run_walk,
+    walk_args,
 )
 from tests.conftest import make_capturing_cc
 
@@ -68,6 +70,23 @@ async def test_fetch_bundle_excludes_the_store_itself(settings: Settings) -> Non
     cap = make_capturing_cc(settings, handler=_walk_handler([_CATALOG_DOC, _SELF_DOC, "junk"], []))
     bundle = await fetch_bundle(cap.client, "ccid")
     assert list(bundle) == ["ShopDV.orders"]
+
+
+def test_walk_args_asks_for_the_whole_catalog_and_names_our_marker() -> None:
+    assert walk_args(None) == '"", "/*okf*/"'
+    assert walk_args("") == '"", "/*okf*/"'
+
+
+def test_walk_args_scopes_the_walk_to_one_dataverse() -> None:
+    assert walk_args("ShopDV") == '"ShopDV", "/*okf*/"'
+
+
+async def test_fetch_bundle_passes_our_marker_so_the_walk_skips_our_plumbing(
+    settings: Settings,
+) -> None:
+    cap = make_capturing_cc(settings, handler=_walk_handler([_CATALOG_DOC], []))
+    await fetch_bundle(cap.client, "ccid")
+    assert f'okf_catalog("", "{PIPELINE_MARKER}")' in cap.last_query_form()["statement"]
 
 
 async def test_fetch_current_keys_rows_by_subject(settings: Settings) -> None:

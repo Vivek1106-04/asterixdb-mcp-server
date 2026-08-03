@@ -63,11 +63,13 @@ from asterixdb_mcp.okf_walk import (  # noqa: E402
     BOOTSTRAP_STATEMENTS,
     CURRENT_ROWS_QUERY,
     KIND,
+    PIPELINE_MARKER,
     SELF_DATAVERSE,
     WALK_QUERY,
     merge_layers,  # noqa: F401  (re-exported: tests and bundles import via this module)
     reconcile,
     reground_overlay,  # noqa: F401  (re-exported)
+    walk_args,
 )
 from asterixdb_mcp.okf_walk import (  # noqa: E402
     in_scope as _in_scope,
@@ -76,9 +78,9 @@ from asterixdb_mcp.okf_walk import (  # noqa: E402
     walk_owned as _walk_owned,  # noqa: F401  (re-exported)
 )
 
-# stamped on every statement the pipeline itself runs so the walk's workload
-# mining never echoes pipeline plumbing back into the concept docs
-PIPELINE_MARKER = "/*okf*/"
+# PIPELINE_MARKER is defined in okf_walk and re-exported here: the same marker
+# stamps this pipeline's statements and is passed to okf_catalog() as its
+# exclude_marker, so the walk never mines our own plumbing back into the docs.
 DATASET_CONCEPT_TYPES = ("AsterixDB Dataset", "AsterixDB External Dataset", "AsterixDB View")
 MAX_ADVISED_STATEMENTS = 3
 
@@ -108,8 +110,7 @@ def bootstrap(cc: str) -> None:
 
 def fetch_bundle(cc: str, dataverse: str | None) -> dict[str, dict[str, Any]]:
     """Walk okf_catalog() and key the emitted concept docs by subject."""
-    args = json.dumps(dataverse) if dataverse else ""
-    rows = execute(cc, WALK_QUERY.format(args=args)).get("results", [])
+    rows = execute(cc, WALK_QUERY.format(args=walk_args(dataverse))).get("results", [])
     return {
         row["subject"]: row
         for row in rows

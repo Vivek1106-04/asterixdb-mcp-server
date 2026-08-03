@@ -21,6 +21,7 @@ walk query itself is read-only.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -40,6 +41,14 @@ from .memory_store import (
 __all__ = ["BOOTSTRAP_STATEMENTS", "SELF_DATAVERSE"]
 
 KIND = "semantic"
+
+# Stamped on every statement this pipeline runs against the walked datasets
+# (grounding counts, ADVISE), and handed to okf_catalog() as its exclude_marker
+# so the engine's workload mining never echoes our own plumbing back into the
+# concept docs. Without it every refresh would find its own last refresh in the
+# workload, change the doc, and supersede the row for no real reason.
+PIPELINE_MARKER = "/*okf*/"
+
 WALK_QUERY = 'SET `import-private-functions` "true"; SELECT VALUE c FROM okf_catalog({args}) c;'
 CURRENT_ROWS_QUERY = (
     f"SELECT VALUE m FROM {MEMORY_DATASET} m "
@@ -50,6 +59,15 @@ _UPSERT_ROW = f"UPSERT INTO {MEMORY_DATASET} ([$row]);"
 _INSERT_ROW = f"INSERT INTO {MEMORY_DATASET} ([$row]);"
 
 _BACKTICKED = re.compile(r"`([^`]+)`")
+
+
+def walk_args(dataverse: str | None) -> str:
+    """Render okf_catalog()'s arguments: which dataverse, and our own marker.
+
+    An empty first argument walks the whole catalog, which is how the engine
+    lets a caller ask for everything while still supplying an exclude marker.
+    """
+    return f"{json.dumps(dataverse or '')}, {json.dumps(PIPELINE_MARKER)}"
 
 
 # pure reconcile core (shared with scripts/okf_refresh.py)
@@ -164,7 +182,7 @@ def in_scope(subject: str, dataverse: str) -> bool:
 
 async def fetch_bundle(client: CCClient, ccid: str) -> dict[str, dict[str, Any]]:
     """Walk okf_catalog() and key the emitted concept docs by subject."""
-    envelope = await client.execute(WALK_QUERY.format(args=""), client_context_id=ccid)
+    envelope = await client.execute(WALK_QUERY.format(args=walk_args(None)), client_context_id=ccid)
     return {
         row["subject"]: row
         for row in envelope.get("results", [])
@@ -224,6 +242,7 @@ __all__ = [
     "BOOTSTRAP_STATEMENTS",
     "CURRENT_ROWS_QUERY",
     "KIND",
+    "PIPELINE_MARKER",
     "SELF_DATAVERSE",
     "WALK_QUERY",
     "bootstrap_store",
@@ -234,5 +253,6 @@ __all__ = [
     "reconcile",
     "reground_overlay",
     "run_walk",
+    "walk_args",
     "walk_owned",
 ]
