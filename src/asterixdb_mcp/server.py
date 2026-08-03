@@ -867,6 +867,10 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
             timeout_ms=timeoutMs,
             capture=scopes.for_call(ctx, settings).capture,
             client_name=_client_identity(ctx),
+            # One notification per poll. The SDK drops these unless the caller
+            # sent a progress token, so this costs nothing for a client that did
+            # not ask and needs no capability check of its own.
+            report=ctx.report_progress,
         )
         return _to_call_tool_result(result)
 

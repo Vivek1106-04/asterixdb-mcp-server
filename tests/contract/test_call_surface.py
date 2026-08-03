@@ -259,6 +259,32 @@ async def test_async_lifecycle_submit_wait_fetch_by_client_context_id() -> None:
     assert fetched.structured_content["rowsReturned"] == 1
 
 
+async def test_wait_tool_hands_the_session_reporter_down_to_the_poll_loop(monkeypatch) -> None:
+    """The wiring under test: the tool must pass ``ctx.report_progress`` down.
+
+    A wait works perfectly well without it, so if this argument were ever
+    dropped the only symptom would be a long poll that went silent again —
+    nothing else in the suite would fail.
+    """
+    from mcp.server.mcpserver import Context
+
+    from asterixdb_mcp import server as server_module
+    from asterixdb_mcp.tools import ToolResult
+
+    seen: dict[str, object] = {}
+
+    async def spy(*_args: object, **kwargs: object) -> ToolResult:
+        seen.update(kwargs)
+        return ToolResult(text="ok", structured={"done": True})
+
+    monkeypatch.setattr(server_module, "run_wait_on_async_query", spy)
+    server = _server_with_mock(lambda r: httpx.Response(200, json={}))
+    await server.call_tool("wait_on_async_query", {"clientContextID": "sess-test::_::u"})
+
+    report = seen["report"]
+    assert getattr(report, "__func__", None) is Context.report_progress
+
+
 async def test_wait_unknown_client_context_id_call() -> None:
     server = _server_with_mock(lambda r: httpx.Response(200, json={}))
     result = await server.call_tool(

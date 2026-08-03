@@ -183,6 +183,122 @@ async def test_wait_polls_until_success(
     assert result.structured["done"] is True
 
 
+async def test_wait_reports_progress_against_the_allowed_window(
+    settings: Settings, audit: AuditLog, pools: PermitPools
+) -> None:
+    _seed_submission(audit)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(200, json={"status": "running"})
+        return httpx.Response(200, json={"status": "success", "handle": "/result/x"})
+
+    cap = make_capturing_cc(settings, handler=handler)
+    fake_time = {"t": 0.0}
+    reported: list[tuple[float, float | None, str | None]] = []
+
+    async def fake_sleep(_seconds: float) -> None:
+        fake_time["t"] += 1.0
+
+    def fake_clock() -> float:
+        return fake_time["t"]
+
+    async def report(progress: float, total: float | None, message: str | None) -> None:
+        reported.append((progress, total, message))
+
+    await run_wait_on_async_query(
+        cap.client,
+        settings,
+        audit,
+        pools,
+        client_context_id="sess-test::_::u",
+        timeout_ms=10_000,
+        sleep=fake_sleep,
+        clock=fake_clock,
+        report=report,
+    )
+
+    # one notification per poll, elapsed seconds against the 10s window
+    assert reported == [
+        (0.0, 10.0, "Query running"),
+        (1.0, 10.0, "Query running"),
+        (2.0, 10.0, "Query success"),
+    ]
+
+
+async def test_wait_progress_never_reports_past_the_window(
+    settings: Settings, audit: AuditLog, pools: PermitPools
+) -> None:
+    """A poll that lands after the deadline must not report more than 100%."""
+    _seed_submission(audit)
+    cap = make_capturing_cc(settings, response_json={"status": "running"})
+    fake_time = {"t": 0.0}
+    reported: list[tuple[float, float | None, str | None]] = []
+
+    def fake_clock() -> float:
+        # the wait window is already blown by the time the first poll returns
+        fake_time["t"] += 30.0
+        return fake_time["t"]
+
+    async def report(progress: float, total: float | None, message: str | None) -> None:
+        reported.append((progress, total, message))
+
+    result = await run_wait_on_async_query(
+        cap.client,
+        settings,
+        audit,
+        pools,
+        client_context_id="sess-test::_::u",
+        timeout_ms=1_000,
+        clock=fake_clock,
+        report=report,
+    )
+
+    assert result.structured["done"] is False
+    assert reported == [(1.0, 1.0, "Query running")]
+
+
+async def test_wait_survives_a_reporter_that_raises(
+    settings: Settings, audit: AuditLog, pools: PermitPools
+) -> None:
+    """The query is already running: a failed notification must not fail the wait.
+
+    Real cause: a client that disconnects mid-wait, or any dispatch path where
+    the session has no request context to notify against.
+    """
+    _seed_submission(audit)
+    cap = make_capturing_cc(settings, response_json={"status": "success", "handle": "/result/x"})
+
+    async def exploding_report(*_args: object) -> None:
+        raise RuntimeError("client went away")
+
+    result = await run_wait_on_async_query(
+        cap.client,
+        settings,
+        audit,
+        pools,
+        client_context_id="sess-test::_::u",
+        report=exploding_report,
+    )
+
+    assert result.is_error is False
+    assert result.structured["done"] is True
+
+
+async def test_wait_without_a_reporter_polls_normally(
+    settings: Settings, audit: AuditLog, pools: PermitPools
+) -> None:
+    """Progress is optional: a caller that passes no reporter is unaffected."""
+    _seed_submission(audit)
+    cap = make_capturing_cc(settings, response_json={"status": "success", "handle": "/result/x"})
+    result = await run_wait_on_async_query(
+        cap.client, settings, audit, pools, client_context_id="sess-test::_::u"
+    )
+    assert result.structured["done"] is True
+
+
 async def test_wait_success_without_result_handle_skips_stash(
     settings: Settings, audit: AuditLog, pools: PermitPools
 ) -> None:
