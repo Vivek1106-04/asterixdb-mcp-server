@@ -23,6 +23,7 @@ from mcp.server.mcpserver import Context
 from pydantic import Field
 
 from . import __version__
+from .artifacts import ARTIFACT_URI_TEMPLATE, artifact_link, read_artifact
 from .audit_log import AuditLog
 from .cc_client import CCClient
 from .completions import complete_argument
@@ -534,11 +535,35 @@ def _to_call_tool_result(result: ToolResult) -> types.CallToolResult:
             structured_content=None,
             is_error=True,
         )
+    content: list[types.ContentBlock] = [
+        types.TextContent(type="text", text=_text_with_payload(result))
+    ]
+    link = _artifact_link_block(result)
+    if link is not None:
+        content.append(link)
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=_text_with_payload(result))],
+        content=content,
         structured_content=result.structured,
         is_error=False,
     )
+
+
+def _artifact_link_block(result: ToolResult) -> types.ResourceLink | None:
+    """A ResourceLink to the overflow artifact this result produced, if any.
+
+    Derived here, from the egress block every results-returning tool already
+    fills via ``overflow_artifact_payload``, rather than threaded through each
+    tool: one chokepoint covers every tool that can overflow, including ones
+    added later. The link is *additive* — the artifact reference stays in the
+    structured payload, so a client that ignores resource links loses nothing.
+    """
+    egress = result.structured.get("egress")
+    if not isinstance(egress, dict):
+        return None
+    fields = artifact_link(egress.get("artifact"))
+    if fields is None:
+        return None
+    return types.ResourceLink(type="resource_link", **fields)
 
 
 def _text_with_payload(result: ToolResult) -> str:
@@ -1338,6 +1363,17 @@ def build_server(settings: Settings, http: httpx.AsyncClient | None = None) -> M
 
     # Parameterized resource templates (client fills the {variables}; they
     # autocomplete through the completion handler registered below).
+
+    @mcp.resource(
+        ARTIFACT_URI_TEMPLATE,
+        name="Overflow Artifact",
+        # The stored bytes are JSON or JSON Lines depending on the artifact's
+        # format, so the template cannot commit to one; the ResourceLink on the
+        # result that produced it carries the exact type.
+        mime_type="application/octet-stream",
+    )
+    async def overflow_artifact_template(artifact_id: str) -> str:
+        return read_artifact(settings, artifact_id)
 
     @mcp.resource(
         "asterixdb://schema/{dataverse}/{dataset}",

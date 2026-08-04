@@ -15,6 +15,13 @@ is required. Artifact ids are random hex; the download route validates the id
 against that shape before touching the filesystem, so a request can never escape
 the artifacts directory.
 
+An artifact is also an MCP resource (``asterixdb://artifacts/{id}``), and a tool
+result that produced one carries a ``ResourceLink`` to it. That is what makes an
+overflow reachable at all under stdio: the HTTP download route exists only on the
+http transport, so a stdio client used to be handed a local filesystem path it
+often could not read. Through ``resources/read`` the same bytes are retrievable
+on either transport by any client, with nothing gateway-specific to understand.
+
 Peer precedent: HTTP-mode MCP servers that expose oversized tool output as a
 download URL with a server-side TTL (the "artifacts-as-resources" pattern).
 """
@@ -45,6 +52,15 @@ _ARTIFACT_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 _EXTENSIONS: dict[str, str] = {"json": "json", "txt": "txt"}
 # Stable per-process temp subdirectory used when artifacts_dir is unset.
 _DEFAULT_DIR_NAME = "asterixdb-mcp-artifacts"
+
+# The MCP resource an artifact is readable as, on every transport.
+ARTIFACT_URI_TEMPLATE = "asterixdb://artifacts/{artifact_id}"
+_MIME_TYPES: dict[str, str] = {"json": "application/json", "txt": "text/plain"}
+
+
+def artifact_uri(artifact_id: str) -> str:
+    """The ``resources/read`` URI for one artifact."""
+    return ARTIFACT_URI_TEMPLATE.format(artifact_id=artifact_id)
 
 
 @dataclass(frozen=True)
@@ -189,6 +205,49 @@ def purge_expired(directory: Path, ttl_s: float, *, now: float | None = None) ->
         except OSError:  # pragma: no cover - racing cleanup, nothing actionable
             logger.debug("skipping un-purgeable artifact %s", child, exc_info=True)
     return removed
+
+
+def artifact_link(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The resource-link fields for an artifact payload, or None if there is none.
+
+    Reads the payload ``to_payload`` produced rather than taking an ``ArtifactRef``
+    so a single chokepoint can turn any tool's egress block into a link without
+    every tool having to thread one through. Returned as plain fields; the server
+    binding builds the SDK's ``ResourceLink`` from them, keeping this module free
+    of MCP types like the rest of the tool tier.
+    """
+    if not payload:
+        return None
+    artifact_id = payload.get("artifactId")
+    if not isinstance(artifact_id, str):
+        return None
+    fmt = str(payload.get("format", "json"))
+    rows = payload.get("totalRows")
+    return {
+        "name": f"{artifact_id}.{_EXTENSIONS.get(fmt, fmt)}",
+        "uri": artifact_uri(artifact_id),
+        "title": "Full result set",
+        "description": (
+            f"The complete {rows} row(s) of this result, of which the response "
+            "above carries only the windowed rows. "
+            f"Expires at {payload.get('expiresAt')}."
+        ),
+        "mimeType": _MIME_TYPES.get(fmt, "application/octet-stream"),
+        "size": payload.get("bytes"),
+    }
+
+
+def read_artifact(settings: Settings, artifact_id: str) -> str:
+    """Read one artifact's bytes as text for ``resources/read``.
+
+    Raises ``FileNotFoundError`` for an unknown, expired, or malformed id — the
+    same three cases the download route answers 404 for, kept identical so an
+    artifact is never readable through one door and not the other.
+    """
+    path = resolve_artifact_file(settings, artifact_id)
+    if path is None:
+        raise FileNotFoundError(f"No artifact {artifact_id!r} (unknown, expired, or malformed id).")
+    return path.read_text(encoding="utf-8")
 
 
 def resolve_artifact_file(settings: Settings, artifact_id: str) -> Path | None:
