@@ -103,6 +103,51 @@ async def test_version_resource_read() -> None:
     assert payload["asterixdb"]["version"] == "deadbeef"
 
 
+async def test_an_overflowing_result_links_an_artifact_the_client_can_then_read(
+    tmp_path: object,
+) -> None:
+    """The end-to-end point of the link: follow it and get the rows that did not fit.
+
+    Under stdio there is no HTTP download route, so before this the overflow was
+    reachable only as a local filesystem path. Going out as a ResourceLink and
+    back in through ``resources/read`` is what makes it retrievable at all.
+    """
+    rows = [{"i": n} for n in range(50)]
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": rows})
+
+    server = _server_with_mock(
+        handler,
+        max_rows_to_llm=5,
+        artifacts_dir=str(tmp_path),
+        transport="stdio",
+    )
+    result = await server.call_tool("execute_query", {"statement": "SELECT * FROM Big;"})
+
+    links = [block for block in result.content if block.type == "resource_link"]
+    assert len(links) == 1
+    link = links[0]
+    assert link.uri.startswith("asterixdb://artifacts/")
+    assert link.mime_type == "application/json"
+
+    # the reference stays in the structured payload too, so a client that
+    # ignores resource links is no worse off than before
+    assert result.structured_content["egress"]["artifact"]["artifactId"] in link.uri
+
+    contents = list(await server.read_resource(link.uri))
+    assert json.loads(contents[0].content) == rows
+
+
+async def test_a_result_that_fits_carries_no_resource_link() -> None:
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "results": [{"n": 1}]})
+
+    server = _server_with_mock(handler)
+    result = await server.call_tool("execute_query", {"statement": "SELECT 1;"})
+    assert [block for block in result.content if block.type == "resource_link"] == []
+
+
 async def test_analyze_dataverse_prompt_get() -> None:
     def handler(_req: httpx.Request) -> httpx.Response:
         return httpx.Response(

@@ -21,7 +21,7 @@ LLM client  ──MCP (stdio | HTTP)──▶  AsterixDB MCP Gateway  ──HTTP
 
 ## Capabilities
 
-**29 tools, 12 resources, 6 resource templates, 6 prompts.** Tools perform
+**29 tools, 12 resources, 7 resource templates, 6 prompts.** Tools perform
 actions; resources expose read-only context a client can attach to a session;
 resource templates expose that context per dataverse/dataset via a URI pattern;
 prompts are guided multi-step workflows.
@@ -41,6 +41,14 @@ shape, so a client can anticipate the payload and chain calls (e.g. that
 The schema characterizes successful results only; an error is flagged with
 `isError` and carries the gateway error envelope, so advertisement never causes
 a failed call to be rejected.
+
+A result too large for the context window is capped at the egress layer, and the
+rows that did not fit are written to an overflow artifact. That artifact is an
+MCP resource (`asterixdb://artifacts/{artifact_id}`), and the result carries a
+`ResourceLink` to it, so the full set is retrievable with `resources/read` on
+either transport — including stdio, where there is no HTTP download route. The
+link is additive: the artifact reference stays in the structured payload, so a
+client that ignores resource links is unaffected.
 
 ### Tools
 

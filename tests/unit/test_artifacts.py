@@ -6,9 +6,15 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from asterixdb_mcp.artifacts import (
+    artifact_link,
+    artifact_uri,
     build_download_url,
+    overflow_artifact_payload,
     purge_expired,
+    read_artifact,
     resolve_artifact_file,
     resolve_artifacts_dir,
     serialize_rows,
@@ -150,3 +156,74 @@ def test_resolve_artifact_file_expired_is_none(tmp_path: Path) -> None:
 def test_resolve_artifacts_dir_defaults_to_tempdir() -> None:
     settings = Settings(cc_base_url="http://test-cc:19002")  # artifacts_dir unset
     assert resolve_artifacts_dir(settings).name == "asterixdb-mcp-artifacts"
+
+
+def test_artifact_link_describes_the_resource_for_a_json_artifact(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    payload = overflow_artifact_payload(
+        [{"i": n} for n in range(3)], overflow=True, settings=settings, fmt="json"
+    )
+    assert payload is not None
+
+    link = artifact_link(payload)
+
+    assert link is not None
+    artifact_id = payload["artifactId"]
+    assert link["uri"] == artifact_uri(artifact_id)
+    assert link["name"] == f"{artifact_id}.json"
+    assert link["mimeType"] == "application/json"
+    assert link["size"] == payload["bytes"]
+    assert "3 row(s)" in link["description"]
+
+
+def test_artifact_link_uses_json_lines_media_type_for_a_txt_artifact(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    payload = overflow_artifact_payload([{"i": 1}], overflow=True, settings=settings, fmt="txt")
+    assert payload is not None
+    link = artifact_link(payload)
+    assert link is not None
+    assert link["mimeType"] == "text/plain"
+    assert link["name"].endswith(".txt")
+
+
+def test_artifact_link_is_none_when_no_artifact_was_written() -> None:
+    # a result that did not overflow attaches no payload, so there is nothing to link
+    assert artifact_link(None) is None
+    assert artifact_link({}) is None
+    assert artifact_link({"note": "malformed, no id"}) is None
+
+
+def test_read_artifact_returns_the_full_row_set(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    rows = [{"i": n} for n in range(5)]
+    payload = overflow_artifact_payload(rows, overflow=True, settings=settings, fmt="json")
+    assert payload is not None
+
+    body = read_artifact(settings, payload["artifactId"])
+
+    # the point of the artifact: all of the rows, not the windowed subset
+    assert json.loads(body) == rows
+
+
+def test_read_artifact_rejects_unknown_expired_and_malformed_ids(tmp_path: Path) -> None:
+    """The resource door answers exactly what the download route does: 404-equivalent.
+
+    A traversal attempt is the same case as an unknown id, which is what keeps
+    the two doors from disagreeing about what is readable.
+    """
+    settings = _settings(tmp_path, artifacts_ttl_s=1)
+    payload = overflow_artifact_payload([{"i": 1}], overflow=True, settings=settings)
+    assert payload is not None
+
+    with pytest.raises(FileNotFoundError):
+        read_artifact(settings, "0" * 32)
+    with pytest.raises(FileNotFoundError):
+        read_artifact(settings, "../../etc/passwd")
+
+    expired = Path(payload["localPath"])
+    old = time.time() - 3600
+    import os
+
+    os.utime(expired, (old, old))
+    with pytest.raises(FileNotFoundError):
+        read_artifact(settings, payload["artifactId"])

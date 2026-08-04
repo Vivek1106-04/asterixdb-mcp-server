@@ -181,6 +181,9 @@ async def test_advertises_resource_templates(server) -> None:
         "asterixdb://datasets/{dataverse}",
         "asterixdb://indexes/{dataverse}/{dataset}",
         "asterixdb://indexes/{dataverse}",
+        # Not catalog context like the others: this is how an overflow artifact
+        # is retrievable on a transport with no HTTP download route.
+        "asterixdb://artifacts/{artifact_id}",
     }
 
 
